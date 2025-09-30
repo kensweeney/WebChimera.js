@@ -1,8 +1,11 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 4.1.1)
 
 project(WebChimera.js)
 
-set(CMAKE_CXX_STANDARD 14)
+set(NODE_RUNTIME electron)
+set(NODE_RUNTIMEVERSION 38.0.0)
+set(NODE_ARCH x64)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(MSVC)
@@ -26,6 +29,7 @@ file(GLOB SOURCE_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
     )
 
 include_directories(${CMAKE_JS_INC} deps)
+include_directories(C:/Users/kensw/.cmake-js/node-x64/v22.20.0/include/node)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/deps/libvlc_wrapper)
 
 add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES} ${CMAKE_JS_SRC})

@@ -8,8 +8,8 @@
 #include <node_object_wrap.h>
 #include <uv.h>
 
-#include <libvlc_wrapper/vlc_player.h>
-#include <libvlc_wrapper/vlc_vmem.h>
+#include "libvlc_wrapper/vlc_player.h"
+#include "libvlc_wrapper/vlc_vmem.h"
 
 #include "VlcVideoOutput.h"
 
