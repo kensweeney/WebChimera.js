@@ -25,7 +25,7 @@
 
 #pragma once
 
-#include <vlc.hpp>
+#include <vlc/vlc.h>
 #include <string>
 
 namespace vlc
