@@ -1,11 +1,11 @@
-cmake_minimum_required(VERSION 4.1.1)
+cmake_minimum_required(VERSION 3.31.6)
 
 project(WebChimera.js)
 
 set(NODE_RUNTIME electron)
 set(NODE_RUNTIMEVERSION 38.0.0)
 set(NODE_ARCH x64)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(MSVC)

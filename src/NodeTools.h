@@ -48,9 +48,13 @@ inline double FromJsValue<double>(const v8::Local<v8::Value>& value)
 template<>
 inline std::string FromJsValue<std::string>(const v8::Local<v8::Value>& value)
 {
-    v8::String::Utf8Value str(v8::Isolate::GetCurrent(), value);
-
-    return *str;
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    v8::String::Utf8Value str(isolate, value);
+    if (*str) {
+        return *str;
+    } else {
+        return std::string();
+    }
 }
 
 template<>
@@ -83,7 +87,8 @@ inline v8::Local<v8::Value> ToJsValue(double value)
 
 inline v8::Local<v8::Value> ToJsValue(const std::string& value)
 {
-    return v8::String::NewFromUtf8(v8::Isolate::GetCurrent(), value.c_str()).ToLocalChecked();
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    return v8::String::NewFromUtf8(isolate, value.c_str(), v8::NewStringType::kNormal).ToLocalChecked();
 }
 
 template<typename C, typename ... A, size_t ... I >
@@ -194,7 +199,7 @@ void GetIndexedPropertyValue(
 
 #define SET_RO_PROPERTY(objTemplate, name, member)                                         \
     objTemplate->SetAccessor(                                                              \
-        String::NewFromUtf8(Isolate::GetCurrent(), name, v8::NewStringType::kInternalized).ToLocalChecked(), \
+        v8::String::NewFromUtf8(v8::Isolate::GetCurrent(), name, v8::NewStringType::kInternalized).ToLocalChecked(), \
         [] (v8::Local<v8::String> /*property*/,                                            \
             const v8::PropertyCallbackInfo<v8::Value>& info)                               \
         {                                                                                  \
@@ -204,7 +209,7 @@ void GetIndexedPropertyValue(
 
 #define SET_RW_PROPERTY(objTemplate, name, getter, setter)                                 \
     objTemplate->SetAccessor(                                                              \
-        String::NewFromUtf8(Isolate::GetCurrent(), name, v8::NewStringType::kInternalized).ToLocalChecked(), \
+        v8::String::NewFromUtf8(v8::Isolate::GetCurrent(), name, v8::NewStringType::kInternalized).ToLocalChecked(), \
         [] (v8::Local<v8::String> /*property*/,                                            \
             const v8::PropertyCallbackInfo<v8::Value>& info)                               \
         {                                                                                  \

@@ -16,9 +16,13 @@ std::vector<std::string> FromJsValue<std::vector<std::string> >(
         Local<Array> jsArray = Local<Array>::Cast(value);
 
         for(unsigned i = 0 ; i < jsArray->Length(); ++i) {
-            String::Utf8Value item(isolate, jsArray->Get(context, i).ToLocalChecked());
-            if(item.length())
-                result.emplace(result.end(), *item);
+            v8::Local<v8::Value> element;
+            if (jsArray->Get(context, i).ToLocal(&element)) {
+                v8::String::Utf8Value item(isolate, element);
+                if (*item) {
+                    result.emplace(result.end(), *item);
+                }
+            }
         }
     }
 
@@ -32,13 +36,17 @@ static v8::Local<v8::Function> RequireFunc(const v8::Local<v8::Object>& thisModu
     Isolate* isolate = Isolate::GetCurrent();
     Local<Context> context = isolate->GetCurrentContext();
 
-    Local<String > name =
+    Local<String> name =
         String::NewFromUtf8(
             isolate,
-            "require",
-            NewStringType::kInternalized).ToLocalChecked();
+            "require", v8::NewStringType::kInternalized).ToLocalChecked();
 
-    return Local<Function>::Cast(thisModule->Get(context, name).ToLocalChecked());
+    v8::Local<v8::Value> require_val;
+    if (!thisModule->Get(context, name).ToLocal(&require_val)) {
+        // Return empty handle if not found
+        return v8::Local<Function>();
+    }
+    return v8::Local<Function>::Cast(require_val);
 }
 
 v8::Local<v8::Object> Require(
@@ -52,7 +60,12 @@ v8::Local<v8::Object> Require(
     Local<Object> global = context->Global();
 
     Local<Value> argv[] =
-        { String::NewFromUtf8(isolate, module, NewStringType::kInternalized).ToLocalChecked() };
+        { String::NewFromUtf8(isolate, module, v8::NewStringType::kInternalized).ToLocalChecked() };
 
-    return Local<Object>::Cast(RequireFunc(thisModule)->Call(context, global, 1, argv).ToLocalChecked());
+    v8::Local<v8::Value> require_result;
+    if (!RequireFunc(thisModule)->Call(context, global, 1, argv).ToLocal(&require_result)) {
+        // Return empty handle if call fails
+        return v8::Local<Object>();
+    }
+    return v8::Local<Object>::Cast(require_result);
 }

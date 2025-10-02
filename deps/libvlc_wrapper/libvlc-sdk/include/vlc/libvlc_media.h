@@ -30,11 +30,12 @@
 extern "C" {
 # endif
 
-#if defined(_MSC_VER)
+
+#if defined(_MSC_VER) && !defined(_SSIZE_T_DEFINED)
 #include <basetsd.h>
 typedef SSIZE_T ssize_t;
+#define _SSIZE_T_DEFINED
 #endif
-
 
 /** \defgroup libvlc_media LibVLC media
  * \ingroup libvlc
