@@ -1,5 +1,5 @@
 set npm_config_wcjs_runtime=electron
-set npm_config_wcjs_runtime_version=38.2.0
+set npm_config_wcjs_runtime_version=39.2.2
 set npm_config_wcjs_arch=x64
 
 npm install --verbose
