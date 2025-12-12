@@ -1,18 +1,14 @@
 #pragma once
 
-#include <string>
+#include <node_api.h>
 
-#include <node.h>
-#include <node_object_wrap.h>
+class JsVlcPlayer;
 
-class JsVlcPlayer; //#include "JsVlcPlayer.h"
-
-class JsVlcInput :
-    public node::ObjectWrap
+class JsVlcInput
 {
 public:
-    static void initJsApi();
-    static v8::UniquePersistent<v8::Object> create(JsVlcPlayer& player);
+    static void initJsApi(napi_env env);
+    static napi_ref create(JsVlcPlayer& player, napi_env env);
 
     double length();
     double fps();
@@ -29,11 +25,24 @@ public:
     void setRate(double);
 
 private:
-    static void jsCreate(const v8::FunctionCallbackInfo<v8::Value>& args);
-    JsVlcInput(v8::Local<v8::Object>& thisObject, JsVlcPlayer*);
+    JsVlcInput(JsVlcPlayer* jsPlayer);
 
-private:
-    static v8::Persistent<v8::Function> _jsConstructor;
+    static napi_value jsCreate(napi_env env, napi_callback_info info);
+    static void jsFinalize(napi_env env, void* data, void* hint);
+
+    static napi_value get_length(napi_env env, napi_callback_info info);
+    static napi_value get_fps(napi_env env, napi_callback_info info);
+    static napi_value get_state(napi_env env, napi_callback_info info);
+    static napi_value get_hasVout(napi_env env, napi_callback_info info);
+    static napi_value get_position(napi_env env, napi_callback_info info);
+    static napi_value set_position(napi_env env, napi_callback_info info);
+    static napi_value get_time(napi_env env, napi_callback_info info);
+    static napi_value set_time(napi_env env, napi_callback_info info);
+    static napi_value get_rate(napi_env env, napi_callback_info info);
+    static napi_value set_rate(napi_env env, napi_callback_info info);
 
     JsVlcPlayer* _jsPlayer;
+    napi_ref _wrapper;
+
+    static napi_ref _jsConstructor;
 };

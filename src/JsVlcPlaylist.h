@@ -1,58 +1,46 @@
 #pragma once
 
-#include <node.h>
-#include <node_object_wrap.h>
+#include <string>
+#include <vector>
+#include <node_api.h>
+#include "vlc_player.h"
 
-#include <libvlc_wrapper/vlc_player.h>
+class JsVlcPlayer;
 
-class JsVlcPlayer; //#include "JsVlcPlayer.h"
-
-class JsVlcPlaylist :
-    public node::ObjectWrap
+class JsVlcPlaylist
 {
 public:
-    enum class PlaybackMode {
-        Normal = vlc::mode_normal,
-        Loop   = vlc::mode_loop,
-        Single = vlc::mode_single,
-    };
+    static void initJsApi(napi_env env);
+    static napi_ref create(napi_env env, JsVlcPlayer& player);
 
-    static v8::UniquePersistent<v8::Object> create(JsVlcPlayer& player);
+private:
+    JsVlcPlaylist(JsVlcPlayer* jsPlayer);
+    ~JsVlcPlaylist();
 
-    static void initJsApi();
+    static napi_value jsCreate(napi_env env, napi_callback_info info);
+    static void jsFinalize(napi_env env, void* data, void* hint);
 
-    unsigned itemCount();
-    bool isPlaying();
-
-    int currentItem();
-    void setCurrentItem(unsigned);
-
-    unsigned mode();
-    void setMode(unsigned);
-
-    int add(const std::string& mrl);
-    int addWithOptions(const std::string& mrl, const std::vector<std::string>& options);
-    void play();
-    bool playItem(unsigned idx);
-    void pause();
-    void togglePause();
-    void stop();
+    int add(const std::string& mrl, const std::vector<std::string>& options);
+    bool play(unsigned index);
     void next();
     void prev();
-    void clear();
-    bool removeItem(unsigned idx);
-    void advanceItem(unsigned idx, int count);
+    napi_value items(napi_env env);
+    int currentItem();
+    std::string playbackMode();
+    void setPlaybackMode(const std::string& mode);
 
-    v8::Local<v8::Object> items();
-
-private:
-    static void jsCreate(const v8::FunctionCallbackInfo<v8::Value>& args);
-    JsVlcPlaylist(v8::Local<v8::Object>& thisObject, JsVlcPlayer*);
-
-private:
-    static v8::Persistent<v8::Function> _jsConstructor;
+    static napi_value add_item(napi_env env, napi_callback_info info);
+    static napi_value play_item(napi_env env, napi_callback_info info);
+    static napi_value next(napi_env env, napi_callback_info info);
+    static napi_value prev(napi_env env, napi_callback_info info);
+    static napi_value get_items(napi_env env, napi_callback_info info);
+    static napi_value get_currentItem(napi_env env, napi_callback_info info);
+    static napi_value get_playbackMode(napi_env env, napi_callback_info info);
+    static napi_value set_playbackMode(napi_env env, napi_callback_info info);
 
     JsVlcPlayer* _jsPlayer;
+    napi_ref _wrapper;
+    napi_ref _jsPlaylistItemsRef;
 
-    v8::UniquePersistent<v8::Object> _jsItems;
+    static napi_ref _jsConstructor;
 };

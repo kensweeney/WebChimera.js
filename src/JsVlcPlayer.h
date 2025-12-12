@@ -1,25 +1,31 @@
 #pragma once
 
-#include <memory>
+#include <uv.h>
+#include <vlc/vlc.h>
+#include <vlc/libvlc_media.h>
+#include <vlc/libvlc_media_player.h>
+
 #include <deque>
+#include <memory>
+#include <mutex>
 #include <set>
 
-#include <node.h>
-#include <node_object_wrap.h>
-#include <uv.h>
-
-#include "libvlc_wrapper/vlc_player.h"
-#include "libvlc_wrapper/vlc_vmem.h"
-
+#include "vlc_player.h"
 #include "VlcVideoOutput.h"
+#include "NodeTools.h"
 
-class JsVlcPlayer :
-    public node::ObjectWrap,
-    private VlcVideoOutput,
-    private vlc::media_player_events_callback
+class JsVlcInput;
+class JsVlcAudio;
+class JsVlcVideo;
+class JsVlcSubtitles;
+class JsVlcPlaylist;
+
+class JsVlcPlayer : public vlc::media_player_events_callback, public VlcVideoOutput
 {
-    enum Callbacks_e {
-        CB_FrameSetup = 0,
+public:
+    enum Callbacks_e
+    {
+        CB_FrameSetup,
         CB_FrameReady,
         CB_FrameCleanup,
 
@@ -43,51 +49,14 @@ class JsVlcPlayer :
 
         CB_LogMessage,
 
-        CB_Max,
+        CB_Max
     };
 
     static const char* callbackNames[CB_Max];
 
-public:
-    static void initJsApi(
-        const v8::Local<v8::Object>& exports,
-        const v8::Local<v8::Value>& module,
-        const v8::Local<v8::Context>& context);
+    static napi_value initJsApi(napi_env env, napi_value exports);
 
-    static void jsPlay(const v8::FunctionCallbackInfo<v8::Value>& args);
-
-    static void getJsCallback(
-        v8::Local<v8::String> property,
-        const v8::PropertyCallbackInfo<v8::Value>& info,
-        Callbacks_e callback);
-    static void setJsCallback(
-        v8::Local<v8::String> property,
-        v8::Local<v8::Value> value,
-        const v8::PropertyCallbackInfo<void>& info,
-        Callbacks_e callback);
-
-    bool playing();
-    double length();
-    unsigned state();
-
-    v8::Local<v8::Value> getVideoFrame();
-    v8::Local<v8::Object> getEventEmitter();
-
-    unsigned pixelFormat();
-    void setPixelFormat(unsigned);
-
-    double position();
-    void setPosition(double);
-
-    double time();
-    void setTime(double);
-
-    unsigned volume();
-    void setVolume(unsigned);
-
-    bool muted();
-    void setMuted(bool);
-
+    // C++ methods
     void play();
     void play(const std::string& mrl);
     void pause();
@@ -95,79 +64,110 @@ public:
     void stop();
     void toggleMute();
 
-    v8::Local<v8::Object> input();
-    v8::Local<v8::Object> audio();
-    v8::Local<v8::Object> video();
-    v8::Local<v8::Object> subtitles();
-    v8::Local<v8::Object> playlist();
-
-    vlc::player& player()
-        { return _player; }
-
-    void close();
+    inline vlc::player& player() { return _player; }
+    inline napi_env getEnv() { return _env; }
+    inline libvlc_instance_t* get_instance() { return _libvlc; }
 
 private:
     struct ContextData;
-
-    static void jsCreate(const v8::FunctionCallbackInfo<v8::Value>& args);
-    JsVlcPlayer(
-        v8::Local<v8::Object>& thisObject,
-        const v8::Local<v8::Array>& vlcOpts,
-        ContextData*);
-    ~JsVlcPlayer();
-
     struct AsyncData;
     struct CallbackData;
     struct LibvlcEvent;
     struct LibvlcLogEvent;
 
-    void initLibvlc(const v8::Local<v8::Array>& vlcOpts);
+    JsVlcPlayer(napi_env env, napi_callback_info info);
+    ~JsVlcPlayer();
+
+    void initLibvlc(napi_env env, napi_value vlcOpts);
+
+    void close();
+
+    void media_player_event(const libvlc_event_t* e) override;
+
+    static void log_event_wrapper(void *data, int level, const libvlc_log_t *ctx, const char *fmt, va_list args);
+    void log_event(int level, const libvlc_log_t *ctx, const char *fmt, va_list args);
 
     void handleAsync();
 
-    //could come from worker thread
-    void media_player_event(const libvlc_event_t*);
-
-    static void log_event_wrapper(
-        void*, int, const libvlc_log_t *, const char *, va_list);
-    void log_event(int, const libvlc_log_t *, const char *, va_list);
-
-    void handleLibvlcEvent(const libvlc_event_t&);
-
-    void currentItemEndReached();
-
-    void callCallback(
-        Callbacks_e callback,
-        std::initializer_list<v8::Local<v8::Value> > list = std::initializer_list<v8::Local<v8::Value> >());
-
-protected:
-    void* onFrameSetup(const RV32VideoFrame&) override;
-    void* onFrameSetup(const I420VideoFrame&) override;
+    void* onFrameSetup(const RV32VideoFrame& videoFrame) override;
+    void* onFrameSetup(const I420VideoFrame& videoFrame) override;
     void onFrameReady() override;
     void onFrameCleanup() override;
 
-private:
-    static v8::Persistent<v8::Function> _jsConstructor;
+    void handleLibvlcEvent(const libvlc_event_t& libvlcEvent);
+    void currentItemEndReached();
 
-    ContextData *const _contextData;
+    void callCallback(Callbacks_e callback, std::initializer_list<napi_value> list = {});
 
+    // N-API methods
+    static napi_value jsCreate(napi_env env, napi_callback_info info);
+    static void jsFinalize(napi_env env, void* data, void* hint);
+
+    static napi_value jsPlay(napi_env env, napi_callback_info info);
+
+    // N-API properties
+    napi_value playing(napi_env env);
+    napi_value length(napi_env env);
+    napi_value state(napi_env env);
+    napi_value getVideoFrame(napi_env env);
+    napi_value getEventEmitter(napi_env env);
+    napi_value pixelFormat(napi_env env);
+    void setPixelFormat(napi_env env, napi_value value);
+    napi_value position(napi_env env);
+    void setPosition(napi_env env, napi_value value);
+    napi_value time(napi_env env);
+    void setTime(napi_env env, napi_value value);
+    napi_value volume(napi_env env);
+    void setVolume(napi_env env, napi_value value);
+    napi_value muted(napi_env env);
+    void setMuted(napi_env env, napi_value value);
+
+    // N-API callback properties
+    napi_value getJsCallback(napi_env env, Callbacks_e callback);
+    void setJsCallback(napi_env env, napi_value value, Callbacks_e callback);
+
+    template<Callbacks_e C>
+    static napi_value getJsCallback(napi_env env, napi_callback_info info);
+
+    template<Callbacks_e C>
+    static napi_value setJsCallback(napi_env env, napi_callback_info info);
+
+    // Wrapped objects
+    napi_value input(napi_env env);
+    napi_value audio(napi_env env);
+    napi_value video(napi_env env);
+    napi_value subtitles(napi_env env);
+    napi_value playlist(napi_env env);
+
+    napi_env _env;
+    napi_ref _wrapper;
+
+    ContextData* _contextData;
     libvlc_instance_t* _libvlc;
     vlc::player _player;
 
     uv_async_t _async;
     std::mutex _asyncDataGuard;
-    std::deque<std::unique_ptr<AsyncData> > _asyncData;
-
-    v8::UniquePersistent<v8::Value> _jsFrameBuffer;
-
-    v8::UniquePersistent<v8::Function> _jsCallbacks[CB_Max];
-    v8::UniquePersistent<v8::Object> _jsEventEmitter;
-
-    v8::UniquePersistent<v8::Object> _jsInput;
-    v8::UniquePersistent<v8::Object> _jsAudio;
-    v8::UniquePersistent<v8::Object> _jsVideo;
-    v8::UniquePersistent<v8::Object> _jsSubtitles;
-    v8::UniquePersistent<v8::Object> _jsPlaylist;
+    std::deque<std::unique_ptr<AsyncData>> _asyncData;
 
     uv_timer_t _errorTimer;
+
+    napi_ref _jsCallbacks[CB_Max];
+    napi_ref _jsEventEmitterRef;
+    napi_ref _jsFrameBufferRef;
+
+    napi_ref _jsInputRef;
+    napi_ref _jsAudioRef;
+    napi_ref _jsVideoRef;
+    napi_ref _jsSubtitlesRef;
+    napi_ref _jsPlaylistRef;
+
+    static napi_ref _jsConstructor;
 };
+
+napi_status napi_call_function(napi_env env,
+                               napi_value recv,
+                               napi_value func,
+                               size_t argc,
+                               const napi_value* argv,
+                               napi_value* result);

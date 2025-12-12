@@ -4,7 +4,7 @@
 
 $VLC_VER = "3.0.21"
 $WCJS_FULL_ARCHIVE = "WebChimera.js_x64_VLC-v$VLC_VER"
-$BUILD_DIR = "C:\Users\kensw\dev\WebChimera.js\build"
+$BUILD_DIR = ".\build"
 
 # Default to x64 if npm_config_wcjs_arch isn't set
 if (-not $env:npm_config_wcjs_arch) {

@@ -1,49 +1,57 @@
 #pragma once
 
 #include <string>
+#include <node_api.h>
 
-#include <node.h>
-#include <node_object_wrap.h>
+class JsVlcPlayer;
 
-class JsVlcPlayer; //#include "JsVlcPlayer.h"
-
-class JsVlcVideo :
-    public node::ObjectWrap
+class JsVlcVideo
 {
 public:
-    static void initJsApi();
-    static v8::UniquePersistent<v8::Object> create(JsVlcPlayer& player);
+    static void initJsApi(napi_env env);
+    static napi_ref create(JsVlcPlayer& player, napi_env env);
 
     unsigned count();
-
     int track();
     void setTrack(unsigned);
-
     double contrast();
     void setContrast(double);
-
     double brightness();
     void setBrightness(double);
-
     int hue();
     void setHue(int);
-
     double saturation();
     void setSaturation(double);
-
     double gamma();
     void setGamma(double);
-
-    v8::Local<v8::Object> deinterlace();
-
-private:
-    static void jsCreate(const v8::FunctionCallbackInfo<v8::Value>& args);
-    JsVlcVideo(v8::Local<v8::Object>& thisObject, JsVlcPlayer*);
+    napi_value deinterlace(napi_env env);
 
 private:
-    static v8::Persistent<v8::Function> _jsConstructor;
+    JsVlcVideo(JsVlcPlayer* jsPlayer, napi_env env);
+    ~JsVlcVideo();
+
+    static napi_value jsCreate(napi_env env, napi_callback_info info);
+    static void jsFinalize(napi_env env, void* data, void* hint);
+
+    static napi_value get_count(napi_env env, napi_callback_info info);
+    static napi_value get_track(napi_env env, napi_callback_info info);
+    static napi_value set_track(napi_env env, napi_callback_info info);
+    static napi_value get_contrast(napi_env env, napi_callback_info info);
+    static napi_value set_contrast(napi_env env, napi_callback_info info);
+    static napi_value get_brightness(napi_env env, napi_callback_info info);
+    static napi_value set_brightness(napi_env env, napi_callback_info info);
+    static napi_value get_hue(napi_env env, napi_callback_info info);
+    static napi_value set_hue(napi_env env, napi_callback_info info);
+    static napi_value get_saturation(napi_env env, napi_callback_info info);
+    static napi_value set_saturation(napi_env env, napi_callback_info info);
+    static napi_value get_gamma(napi_env env, napi_callback_info info);
+    static napi_value set_gamma(napi_env env, napi_callback_info info);
+    static napi_value get_deinterlace(napi_env env, napi_callback_info info);
 
     JsVlcPlayer* _jsPlayer;
+    napi_ref _wrapper;
+    napi_ref _jsDeinterlaceRef;
+    napi_env _env;
 
-    v8::UniquePersistent<v8::Object> _jsDeinterlace;
+    static napi_ref _jsConstructor;
 };

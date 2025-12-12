@@ -6,7 +6,7 @@
 
 #include <uv.h>
 
-#include <libvlc_wrapper/vlc_vmem.h>
+#include "vlc_vmem.h"
 
 ///////////////////////////////////////////////////////////////////////////////
 class VlcVideoOutput :

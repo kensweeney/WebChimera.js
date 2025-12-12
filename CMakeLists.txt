@@ -28,11 +28,17 @@ file(GLOB SOURCE_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
     package.json
     )
 
-include_directories(${CMAKE_JS_INC} deps)
-include_directories(C:/Users/kensw/.cmake-js/node-x64/v22.20.0/include/node)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/deps/libvlc_wrapper)
 
 add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES} ${CMAKE_JS_SRC})
+
+target_include_directories(${PROJECT_NAME}
+    PUBLIC
+        ${CMAKE_JS_INC}
+        "${CMAKE_CURRENT_SOURCE_DIR}/deps/libvlc_wrapper"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
 set_target_properties(${PROJECT_NAME} PROPERTIES PREFIX "" SUFFIX ".node")
 target_link_libraries(${PROJECT_NAME} ${CMAKE_JS_LIB} libvlc_wrapper)
 

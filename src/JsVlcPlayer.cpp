@@ -1,9 +1,9 @@
 #include "JsVlcPlayer.h"
 
 #include <string.h>
+#include <vector>
+#include <windows.h>
 
-#include "node.h"
-#include "node_buffer.h"
 #include "NodeTools.h"
 #include "JsVlcInput.h"
 #include "JsVlcAudio.h"
@@ -11,55 +11,27 @@
 #include "JsVlcSubtitles.h"
 #include "JsVlcPlaylist.h"
 
-#if V8_MAJOR_VERSION > 4 || \
-    (V8_MAJOR_VERSION == 4 && V8_MINOR_VERSION > 4) || \
-    (V8_MAJOR_VERSION == 4 && V8_MINOR_VERSION == 4 && V8_BUILD_NUMBER >= 26)
-
-#define USE_ARRAY_BUFFER 1
-
-#endif
-
 #undef min
 #undef max
 
 const char* JsVlcPlayer::callbackNames[] =
 {
-    "FrameSetup",
-    "FrameReady",
-    "FrameCleanup",
-
-    "MediaChanged",
-    "NothingSpecial",
-    "Opening",
-    "Buffering",
-    "Playing",
-    "Paused",
-    "Stopped",
-    "Forward",
-    "Backward",
-    "EndReached",
-    "EncounteredError",
-
-    "TimeChanged",
-    "PositionChanged",
-    "SeekableChanged",
-    "PausableChanged",
-    "LengthChanged",
-
+    "FrameSetup", "FrameReady", "FrameCleanup",
+    "MediaChanged", "NothingSpecial", "Opening", "Buffering", "Playing", "Paused", "Stopped", "Forward", "Backward", "EndReached", "EncounteredError",
+    "TimeChanged", "PositionChanged", "SeekableChanged", "PausableChanged", "LengthChanged",
     "LogMessage"
 };
 
-v8::Persistent<v8::Function> JsVlcPlayer::_jsConstructor;
+napi_ref JsVlcPlayer::_jsConstructor = nullptr;
 
-// https://nodejs.org/api/addons.html#addons_context_aware_addons
-///////////////////////////////////////////////////////////////////////////////
 struct JsVlcPlayer::ContextData
 {
-    ContextData(const v8::Local<v8::Object>& thisModule) :
-        thisModule(v8::Isolate::GetCurrent(), thisModule) {}
+    ContextData(napi_env env, napi_value thisModule) {
+        napi_create_reference(env, thisModule, 1, &thisModuleRef);
+    }
     ~ContextData();
 
-    v8::Persistent<v8::Object> thisModule;
+    napi_ref thisModuleRef;
     std::set<JsVlcPlayer*> instances;
 };
 
@@ -70,388 +42,253 @@ JsVlcPlayer::ContextData::~ContextData()
     }
 }
 
-///////////////////////////////////////////////////////////////////////////////
 struct JsVlcPlayer::AsyncData
 {
     virtual void process(JsVlcPlayer*) = 0;
+    virtual ~AsyncData() = default;
 };
 
-///////////////////////////////////////////////////////////////////////////////
 struct JsVlcPlayer::CallbackData : public JsVlcPlayer::AsyncData
 {
-    CallbackData(JsVlcPlayer::Callbacks_e callback) :
-        callback(callback) {}
-
-    void process(JsVlcPlayer*);
-
+    CallbackData(JsVlcPlayer::Callbacks_e callback) : callback(callback) {}
+    void process(JsVlcPlayer* jsPlayer) override {
+        jsPlayer->callCallback(callback);
+    }
     const JsVlcPlayer::Callbacks_e callback;
 };
 
-void JsVlcPlayer::CallbackData::process(JsVlcPlayer* jsPlayer)
-{
-    jsPlayer->callCallback(callback);
-}
-
-///////////////////////////////////////////////////////////////////////////////
 struct JsVlcPlayer::LibvlcEvent : public JsVlcPlayer::AsyncData
 {
-    LibvlcEvent(const libvlc_event_t& libvlcEvent) :
-        libvlcEvent(libvlcEvent) {}
-
-    void process(JsVlcPlayer*);
-
+    LibvlcEvent(const libvlc_event_t& libvlcEvent) : libvlcEvent(libvlcEvent) {}
+    void process(JsVlcPlayer* jsPlayer) override {
+        jsPlayer->handleLibvlcEvent(libvlcEvent);
+    }
     const libvlc_event_t libvlcEvent;
 };
 
-void JsVlcPlayer::LibvlcEvent::process(JsVlcPlayer* jsPlayer)
-{
-    jsPlayer->handleLibvlcEvent(libvlcEvent);
-}
-
-///////////////////////////////////////////////////////////////////////////////
 struct JsVlcPlayer::LibvlcLogEvent : public JsVlcPlayer::AsyncData
 {
     LibvlcLogEvent(int level, const std::string& message, const std::string& format) :
         level(level), message(message), format(format) {}
 
-    void process(JsVlcPlayer*);
+    void process(JsVlcPlayer* jsPlayer) override {
+        napi_env env = jsPlayer->_env;
+        napi_value jsLevel, jsMessage, jsFormat;
+        napi_create_int32(env, level, &jsLevel);
+        napi_create_string_utf8(env, message.c_str(), NAPI_AUTO_LENGTH, &jsMessage);
+        napi_create_string_utf8(env, format.c_str(), NAPI_AUTO_LENGTH, &jsFormat);
+        jsPlayer->callCallback(CB_LogMessage, { jsLevel, jsMessage, jsFormat });
+    }
 
     const int level;
     std::string message;
     std::string format;
 };
 
-void JsVlcPlayer::LibvlcLogEvent::process(JsVlcPlayer* jsPlayer)
+#define NAPI_METHOD(name, func) \
+    { name, nullptr, func, nullptr, nullptr, nullptr, napi_default, nullptr }
+
+#define NAPI_GETTER(name, getter) \
+    { name, nullptr, nullptr, getter, nullptr, nullptr, napi_default, nullptr }
+
+#define NAPI_PROPERTY(name, getter, setter) \
+    { name, nullptr, nullptr, getter, setter, nullptr, napi_default, nullptr }
+
+napi_value JsVlcPlayer::initJsApi(napi_env env, napi_value exports)
 {
-    using namespace v8;
+    ContextData* contextData = new ContextData(env, exports);
+    napi_add_env_cleanup_hook(env, [](void* arg) { delete static_cast<ContextData*>(arg); }, contextData);
 
-    Isolate* isolate = Isolate::GetCurrent();
-    HandleScope scope(isolate);
+    JsVlcInput::initJsApi(env);
+    JsVlcAudio::initJsApi(env);
+    JsVlcVideo::initJsApi(env);
+    JsVlcSubtitles::initJsApi(env);
+    JsVlcPlaylist::initJsApi(env);
 
-    Local<Integer> jsLevel = Integer::New(isolate, level);
-    Local<String> jsMessage =
-        String::NewFromUtf8(isolate, message.c_str()).ToLocalChecked();
-    Local<String> jsFormat =
-        String::NewFromUtf8(isolate, format.c_str()).ToLocalChecked();
+    napi_property_descriptor properties[] = {
+        NAPI_METHOD("play", jsPlay),
+        NAPI_METHOD("pause", [](napi_env env, napi_callback_info info) -> napi_value {
+            napi_value this_arg;
+            napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+            JsVlcPlayer* p;
+            napi_unwrap(env, this_arg, (void**)&p);
+            p->pause();
+            return nullptr;
+        }),
+        NAPI_METHOD("togglePause", [](napi_env env, napi_callback_info info) -> napi_value {
+            napi_value this_arg;
+            napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+            JsVlcPlayer* p;
+            napi_unwrap(env, this_arg, (void**)&p);
+            p->togglePause();
+            return nullptr;
+        }),
+        NAPI_METHOD("stop", [](napi_env env, napi_callback_info info) -> napi_value {
+            napi_value this_arg;
+            napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+            JsVlcPlayer* p;
+            napi_unwrap(env, this_arg, (void**)&p);
+            p->stop();
+            return nullptr;
+        }),
+        NAPI_METHOD("toggleMute", [](napi_env env, napi_callback_info info) -> napi_value {
+            napi_value this_arg;
+            napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+            JsVlcPlayer* p;
+            napi_unwrap(env, this_arg, (void**)&p);
+            p->toggleMute();
+            return nullptr;
+        }),
+        NAPI_METHOD("close", [](napi_env env, napi_callback_info info) -> napi_value {
+            napi_value this_arg;
+            napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+            JsVlcPlayer* p;
+            napi_unwrap(env, this_arg, (void**)&p);
+            p->close();
+            return nullptr;
+        }),
+        NAPI_PROPERTY("onFrameSetup", JsVlcPlayer::getJsCallback<CB_FrameSetup>, JsVlcPlayer::setJsCallback<CB_FrameSetup>),
+        NAPI_PROPERTY("onFrameReady", JsVlcPlayer::getJsCallback<CB_FrameReady>, JsVlcPlayer::setJsCallback<CB_FrameReady>),
+        NAPI_PROPERTY("onFrameCleanup", JsVlcPlayer::getJsCallback<CB_FrameCleanup>, JsVlcPlayer::setJsCallback<CB_FrameCleanup>),
+        NAPI_PROPERTY("onMediaChanged", JsVlcPlayer::getJsCallback<CB_MediaPlayerMediaChanged>, JsVlcPlayer::setJsCallback<CB_MediaPlayerMediaChanged>),
+        NAPI_PROPERTY("onNothingSpecial", JsVlcPlayer::getJsCallback<CB_MediaPlayerNothingSpecial>, JsVlcPlayer::setJsCallback<CB_MediaPlayerNothingSpecial>),
+        NAPI_PROPERTY("onOpening", JsVlcPlayer::getJsCallback<CB_MediaPlayerOpening>, JsVlcPlayer::setJsCallback<CB_MediaPlayerOpening>),
+        NAPI_PROPERTY("onBuffering", JsVlcPlayer::getJsCallback<CB_MediaPlayerBuffering>, JsVlcPlayer::setJsCallback<CB_MediaPlayerBuffering>),
+        NAPI_PROPERTY("onPlaying", JsVlcPlayer::getJsCallback<CB_MediaPlayerPlaying>, JsVlcPlayer::setJsCallback<CB_MediaPlayerPlaying>),
+        NAPI_PROPERTY("onPaused", JsVlcPlayer::getJsCallback<CB_MediaPlayerPaused>, JsVlcPlayer::setJsCallback<CB_MediaPlayerPaused>),
+        NAPI_PROPERTY("onForward", JsVlcPlayer::getJsCallback<CB_MediaPlayerForward>, JsVlcPlayer::setJsCallback<CB_MediaPlayerForward>),
+        NAPI_PROPERTY("onBackward", JsVlcPlayer::getJsCallback<CB_MediaPlayerBackward>, JsVlcPlayer::setJsCallback<CB_MediaPlayerBackward>),
+        NAPI_PROPERTY("onEncounteredError", JsVlcPlayer::getJsCallback<CB_MediaPlayerEncounteredError>, JsVlcPlayer::setJsCallback<CB_MediaPlayerEncounteredError>),
+        NAPI_PROPERTY("onEndReached", JsVlcPlayer::getJsCallback<CB_MediaPlayerEndReached>, JsVlcPlayer::setJsCallback<CB_MediaPlayerEndReached>),
+        NAPI_PROPERTY("onStopped", JsVlcPlayer::getJsCallback<CB_MediaPlayerStopped>, JsVlcPlayer::setJsCallback<CB_MediaPlayerStopped>),
+        NAPI_PROPERTY("onTimeChanged", JsVlcPlayer::getJsCallback<CB_MediaPlayerTimeChanged>, JsVlcPlayer::setJsCallback<CB_MediaPlayerTimeChanged>),
+        NAPI_PROPERTY("onPositionChanged", JsVlcPlayer::getJsCallback<CB_MediaPlayerPositionChanged>, JsVlcPlayer::setJsCallback<CB_MediaPlayerPositionChanged>),
+        NAPI_PROPERTY("onSeekableChanged", JsVlcPlayer::getJsCallback<CB_MediaPlayerSeekableChanged>, JsVlcPlayer::setJsCallback<CB_MediaPlayerSeekableChanged>),
+        NAPI_PROPERTY("onPausableChanged", JsVlcPlayer::getJsCallback<CB_MediaPlayerPausableChanged>, JsVlcPlayer::setJsCallback<CB_MediaPlayerPausableChanged>),
+        NAPI_PROPERTY("onLengthChanged", JsVlcPlayer::getJsCallback<CB_MediaPlayerLengthChanged>, JsVlcPlayer::setJsCallback<CB_MediaPlayerLengthChanged>),
+        NAPI_PROPERTY("onLogMessage", JsVlcPlayer::getJsCallback<CB_LogMessage>, JsVlcPlayer::setJsCallback<CB_LogMessage>)
+    };
 
-    jsPlayer->callCallback(CB_LogMessage, { jsLevel, jsMessage, jsFormat });
+    napi_value constructor;
+    napi_define_class(env, "VlcPlayer", NAPI_AUTO_LENGTH, jsCreate, contextData, sizeof(properties)/sizeof(properties[0]), properties, &constructor);
+    napi_create_reference(env, constructor, 1, &_jsConstructor);
+    napi_set_named_property(env, exports, "VlcPlayer", constructor);
+    napi_set_named_property(env, exports, "createPlayer", constructor);
+
+    // ... set other exports like vlcVersion
+    return exports;
 }
 
-///////////////////////////////////////////////////////////////////////////////
-#define SET_CALLBACK_PROPERTY(objTemplate, name, callback)                                                      \
-    objTemplate->SetAccessor(String::NewFromUtf8(Isolate::GetCurrent(), name, v8::NewStringType::kInternalized).ToLocalChecked(), \
-        [] (v8::Local<v8::String> property,                                                                     \
-            const v8::PropertyCallbackInfo<v8::Value>& info)                                                    \
-        {                                                                                                       \
-            JsVlcPlayer::getJsCallback(property, info, callback);                                               \
-        },                                                                                                      \
-        [] (v8::Local<v8::String> property,                                                                     \
-            v8::Local<v8::Value> value,                                                                         \
-             const v8::PropertyCallbackInfo<void>& info)                                                        \
-        {                                                                                                       \
-            JsVlcPlayer::setJsCallback(property, value, info, callback);                                        \
-        })
-
-void JsVlcPlayer::initJsApi(
-    const v8::Local<v8::Object>& exports,
-    const v8::Local<v8::Value>& thisModule,
-    const v8::Local<v8::Context>& context)
-{
-    using namespace v8;
-
-    Isolate* isolate = context->GetIsolate();
-    ContextData* contextData =
-        new ContextData(
-            Local<Object>::Cast(thisModule));
-    Local<External> externalContextData = External::New(isolate, contextData);
-    node::AddEnvironmentCleanupHook(
-        isolate,
-        [] (void* contextData) {
-            delete static_cast<ContextData*>(contextData);
-        }, contextData);
-
-    JsVlcInput::initJsApi();
-    JsVlcAudio::initJsApi();
-    JsVlcVideo::initJsApi();
-    JsVlcSubtitles::initJsApi();
-    JsVlcPlaylist::initJsApi();
-
-    assert(Isolate::GetCurrent() == isolate);
-    assert(isolate->GetCurrentContext() == context);
-
-    Local<FunctionTemplate> constructorTemplate =
-        FunctionTemplate::New(isolate, jsCreate, externalContextData);
-    constructorTemplate->SetClassName(
-        String::NewFromUtf8(
-            isolate,
-            "VlcPlayer",
-            NewStringType::kInternalized).ToLocalChecked());
-
-    Local<ObjectTemplate> protoTemplate = constructorTemplate->PrototypeTemplate();
-    Local<ObjectTemplate> instanceTemplate = constructorTemplate->InstanceTemplate();
-    instanceTemplate->SetInternalFieldCount(1);
-
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "RV32", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, static_cast<int>(PixelFormat::RV32)),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "I420", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, static_cast<int>(PixelFormat::I420)),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "NothingSpecial", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, libvlc_NothingSpecial),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "Opening", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, libvlc_Opening),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "Buffering", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, libvlc_Buffering),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "Playing", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, libvlc_Playing),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "Paused", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, libvlc_Paused),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "Stopped", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, libvlc_Stopped),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "Ended", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, libvlc_Ended),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "Error", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, libvlc_Error),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-
-    Local<String> vlcVersion =
-        String::NewFromUtf8(
-            isolate,
-            libvlc_get_version()).ToLocalChecked();
-    Local<String> vlcChangeset =
-        String::NewFromUtf8(
-            isolate,
-            libvlc_get_changeset()).ToLocalChecked();
-
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "vlcVersion", NewStringType::kInternalized).ToLocalChecked(),
-        vlcVersion,
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "vlcChangeset", NewStringType::kInternalized).ToLocalChecked(),
-        vlcChangeset,
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onFrameSetup", CB_FrameSetup);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onFrameReady", CB_FrameReady);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onFrameCleanup", CB_FrameCleanup);
-
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onMediaChanged", CB_MediaPlayerMediaChanged);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onNothingSpecial", CB_MediaPlayerNothingSpecial);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onOpening", CB_MediaPlayerOpening);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onBuffering", CB_MediaPlayerBuffering);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onPlaying", CB_MediaPlayerPlaying);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onPaused", CB_MediaPlayerPaused);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onForward", CB_MediaPlayerForward);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onBackward", CB_MediaPlayerBackward);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onEncounteredError", CB_MediaPlayerEncounteredError);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onEndReached", CB_MediaPlayerEndReached);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onStopped", CB_MediaPlayerStopped);
-
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onTimeChanged", CB_MediaPlayerTimeChanged);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onPositionChanged", CB_MediaPlayerPositionChanged);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onSeekableChanged", CB_MediaPlayerSeekableChanged);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onPausableChanged", CB_MediaPlayerPausableChanged);
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onLengthChanged", CB_MediaPlayerLengthChanged);
-
-    SET_CALLBACK_PROPERTY(instanceTemplate, "onLogMessage", CB_LogMessage);
-
-    SET_RO_PROPERTY(instanceTemplate, "playing", &JsVlcPlayer::playing);
-    SET_RO_PROPERTY(instanceTemplate, "length", &JsVlcPlayer::length);
-    SET_RO_PROPERTY(instanceTemplate, "state", &JsVlcPlayer::state);
-
-    SET_RO_PROPERTY(instanceTemplate, "input", &JsVlcPlayer::input);
-    SET_RO_PROPERTY(instanceTemplate, "audio", &JsVlcPlayer::audio);
-    SET_RO_PROPERTY(instanceTemplate, "video", &JsVlcPlayer::video);
-    SET_RO_PROPERTY(instanceTemplate, "subtitles", &JsVlcPlayer::subtitles);
-    SET_RO_PROPERTY(instanceTemplate, "playlist", &JsVlcPlayer::playlist);
-
-    SET_RO_PROPERTY(instanceTemplate, "videoFrame", &JsVlcPlayer::getVideoFrame);
-    SET_RO_PROPERTY(instanceTemplate, "events", &JsVlcPlayer::getEventEmitter);
-
-    SET_RW_PROPERTY(instanceTemplate, "pixelFormat", &JsVlcPlayer::pixelFormat, &JsVlcPlayer::setPixelFormat);
-    SET_RW_PROPERTY(instanceTemplate, "position", &JsVlcPlayer::position, &JsVlcPlayer::setPosition);
-    SET_RW_PROPERTY(instanceTemplate, "time", &JsVlcPlayer::time, &JsVlcPlayer::setTime);
-    SET_RW_PROPERTY(instanceTemplate, "volume", &JsVlcPlayer::volume, &JsVlcPlayer::setVolume);
-    SET_RW_PROPERTY(instanceTemplate, "mute", &JsVlcPlayer::muted, &JsVlcPlayer::setMuted);
-
-    NODE_SET_PROTOTYPE_METHOD(constructorTemplate, "play", jsPlay);
-    SET_METHOD(constructorTemplate, "pause", &JsVlcPlayer::pause);
-    SET_METHOD(constructorTemplate, "togglePause", &JsVlcPlayer::togglePause);
-    SET_METHOD(constructorTemplate, "stop",  &JsVlcPlayer::stop);
-    SET_METHOD(constructorTemplate, "toggleMute", &JsVlcPlayer::toggleMute);
-
-    SET_METHOD(constructorTemplate, "close", &JsVlcPlayer::close);
-
-    Local<Function> constructor = constructorTemplate->GetFunction(context).ToLocalChecked();
-    _jsConstructor.Reset(isolate, constructor);
-
-    exports->Set(
-        context,
-        String::NewFromUtf8(isolate, "VlcPlayer", NewStringType::kInternalized).ToLocalChecked(),
-        constructor).FromJust();
-    exports->Set(
-        context,
-        String::NewFromUtf8(isolate, "createPlayer", NewStringType::kInternalized).ToLocalChecked(),
-        constructor).FromJust();
-
-    exports->DefineOwnProperty(
-        context,
-        String::NewFromUtf8(isolate, "vlcVersion", NewStringType::kInternalized).ToLocalChecked(),
-        vlcVersion,
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete)).FromJust();
-    exports->DefineOwnProperty(
-        context,
-        String::NewFromUtf8(isolate, "vlcChangeset", NewStringType::kInternalized).ToLocalChecked(),
-        vlcChangeset,
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete)).FromJust();
-}
-
-void JsVlcPlayer::jsCreate(const v8::FunctionCallbackInfo<v8::Value>& args)
-{
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
-
-    Local<Object> thisObject = args.Holder();
-    if(args.IsConstructCall()) {
-        Local<Array> options;
-        if(args.Length() == 1 && args[0]->IsArray()) {
-            options = Local<Array>::Cast(args[0]);
-        }
-
-        ContextData* contextData =
-            static_cast<ContextData*>(args.Data().As<External>()->Value());
-
-        JsVlcPlayer* jsPlayer = new JsVlcPlayer(thisObject, options, contextData);
-        args.GetReturnValue().Set(jsPlayer->handle());
+napi_value JsVlcPlayer::jsCreate(napi_env env, napi_callback_info info) {
+    napi_value target;
+    napi_get_new_target(env, info, &target);
+    if (target) {
+        napi_value this_arg;
+        napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+        JsVlcPlayer* player = new JsVlcPlayer(env, info);
+        napi_wrap(env, this_arg, player, jsFinalize, nullptr, &player->_wrapper);
+        return this_arg;
     } else {
-        Local<Value> argv[] = { args[0] };
-        Local<Function> constructor =
-            Local<Function>::New(isolate, _jsConstructor);
-        args.GetReturnValue().Set(
-            constructor->NewInstance(
-                context,
-                sizeof(argv) / sizeof(argv[0]), argv).ToLocalChecked());
+        // Invoked as plain function `VlcPlayer(...)`, turn into construct call.
+        size_t argc = 1;
+        napi_value args[1];
+        napi_value this_arg;
+        napi_get_cb_info(env, info, &argc, args, &this_arg, nullptr);
+
+        napi_value cons;
+        napi_get_reference_value(env, _jsConstructor, &cons);
+        
+        napi_value instance;
+        napi_new_instance(env, cons, argc, args, &instance);
+        return instance;
     }
 }
 
-JsVlcPlayer::JsVlcPlayer(
-    v8::Local<v8::Object>& thisObject,
-    const v8::Local<v8::Array>& vlcOpts,
-    ContextData* contextData) :
-    _contextData(contextData),
-    _libvlc(nullptr)
-{
-    using namespace v8;
+void JsVlcPlayer::jsFinalize(napi_env env, void* data, void* hint) {
+    delete static_cast<JsVlcPlayer*>(data);
+}
 
-    Wrap(thisObject);
+JsVlcPlayer::JsVlcPlayer(napi_env env, napi_callback_info info) : _env(env), _libvlc(nullptr) {
+    _wrapper = nullptr;
+    for(int i=0; i<CB_Max; ++i) _jsCallbacks[i] = nullptr;
+    _jsEventEmitterRef = nullptr;
+    _jsFrameBufferRef = nullptr;
+    _jsInputRef = nullptr;
+    _jsAudioRef = nullptr;
+    _jsVideoRef = nullptr;
+    _jsSubtitlesRef = nullptr;
+    _jsPlaylistRef = nullptr;
 
+    size_t argc = 1;
+    napi_value args[1];
+    napi_value this_arg;
+    void* data;
+    napi_get_cb_info(env, info, &argc, args, &this_arg, &data);
+    _contextData = static_cast<ContextData*>(data);
     _contextData->instances.insert(this);
 
-    uv_loop_t* loop = uv_default_loop();
+    uv_loop_t* loop;
+    napi_get_uv_event_loop(env, &loop);
 
-    uv_async_init(loop, &_async,
-        [] (uv_async_t* handle) {
-            if(handle->data)
-                reinterpret_cast<JsVlcPlayer*>(handle->data)->handleAsync();
-        }
-  );
+    uv_async_init(loop, &_async, [](uv_async_t* handle) {
+        if(handle->data) reinterpret_cast<JsVlcPlayer*>(handle->data)->handleAsync();
+    });
     _async.data = this;
 
     uv_timer_init(loop, &_errorTimer);
     _errorTimer.data = this;
 
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
+    napi_value eventEmitter = Require(env, "events");
+    napi_value eventEmitterConstructor;
+    napi_get_named_property(env, eventEmitter, "EventEmitter", &eventEmitterConstructor);
+    napi_value eventEmitterInstance;
+    napi_new_instance(env, eventEmitterConstructor, 0, nullptr, &eventEmitterInstance);
+    napi_create_reference(env, eventEmitterInstance, 1, &_jsEventEmitterRef);
 
-    Local<Object> thisModule =
-        Local<Object>::New(Isolate::GetCurrent(), contextData->thisModule);
-
-    Local<Function> jsEventEmitterConstructor =
-        Local<Function>::Cast(
-            Require(thisModule, "events")->Get(
-                context,
-                String::NewFromUtf8(
-                    isolate,
-                    "EventEmitter",
-                    NewStringType::kInternalized).ToLocalChecked()
-            ).ToLocalChecked());
-
-    Local<Object> jsEventEmitter =
-        Local<Object>::Cast(jsEventEmitterConstructor->NewInstance(context).ToLocalChecked());
-
-    _jsEventEmitter.Reset(isolate, jsEventEmitter);
-
-    initLibvlc(vlcOpts);
+    initLibvlc(env, argc > 0 ? args[0] : nullptr);
 
     _player.set_playback_mode(vlc::mode_normal);
 
     if(_libvlc && _player.open(_libvlc)) {
         _player.register_callback(this);
         VlcVideoOutput::open(&_player.basic_player());
-    } else {
-        assert(false);
     }
 
-    _jsInput = JsVlcInput::create(*this);
-    _jsAudio = JsVlcAudio::create(*this);
-    _jsVideo = JsVlcVideo::create(*this);
-    _jsSubtitles = JsVlcSubtitles::create(*this);
-    _jsPlaylist = JsVlcPlaylist::create(*this);
+    _jsInputRef = JsVlcInput::create(*this, env);
+    _jsAudioRef = JsVlcAudio::create(env, *this);
+    _jsVideoRef = JsVlcVideo::create(*this, env);
+    _jsSubtitlesRef = JsVlcSubtitles::create(*this, env);
+    _jsPlaylistRef = JsVlcPlaylist::create(env, *this);
 }
 
-void JsVlcPlayer::initLibvlc(const v8::Local<v8::Array>& vlcOpts)
-{
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
-
+void JsVlcPlayer::initLibvlc(napi_env env, napi_value vlcOpts) {
     if(_libvlc) {
-        assert(false);
         libvlc_release(_libvlc);
         _libvlc = nullptr;
     }
 
-    if(vlcOpts.IsEmpty() || vlcOpts->Length() == 0) {
-        _libvlc = libvlc_new(0, nullptr);
-    } else {
-        std::deque<std::string> opts;
+    bool is_array = false;
+    if (vlcOpts) {
+        napi_is_array(env, vlcOpts, &is_array);
+    }
+
+    if(vlcOpts && is_array) {
+        uint32_t length;
+        napi_get_array_length(env, vlcOpts, &length);
+        std::vector<std::string> opts_storage;
         std::vector<const char*> libvlcOpts;
+        opts_storage.reserve(length);
+        libvlcOpts.reserve(length);
 
-        for(unsigned i = 0;
-            i < std::min<unsigned>(vlcOpts->Length(), std::numeric_limits<short>::max());
-            ++i)
-        {
-            String::Utf8Value opt(isolate, vlcOpts->Get(context, i).ToLocalChecked());
-            if(opt.length()) {
-                auto it = opts.emplace(opts.end(), *opt);
-                libvlcOpts.push_back(it->c_str());
-            }
+        for(uint32_t i = 0; i < length; ++i) {
+            napi_value opt_val;
+            napi_get_element(env, vlcOpts, i, &opt_val);
+            opts_storage.push_back(FromNapiValue<std::string>(env, opt_val));
+            libvlcOpts.push_back(opts_storage.back().c_str());
         }
-
-        _libvlc = libvlc_new(static_cast<int>(libvlcOpts.size()), libvlcOpts.data());
+        _libvlc = libvlc_new(libvlcOpts.size(), libvlcOpts.data());
+    } else {
+        _libvlc = libvlc_new(0, nullptr);
     }
 
     if(_libvlc) {
@@ -459,18 +296,24 @@ void JsVlcPlayer::initLibvlc(const v8::Local<v8::Array>& vlcOpts)
     }
 }
 
-JsVlcPlayer::~JsVlcPlayer()
-{
+JsVlcPlayer::~JsVlcPlayer() {
     close();
-
     _contextData->instances.erase(this);
+    for(int i=0; i<CB_Max; ++i) {
+        if (_jsCallbacks[i]) napi_delete_reference(_env, _jsCallbacks[i]);
+    }
+    if (_jsEventEmitterRef) napi_delete_reference(_env, _jsEventEmitterRef);
+    if (_jsFrameBufferRef) napi_delete_reference(_env, _jsFrameBufferRef);
+    if (_jsInputRef) napi_delete_reference(_env, _jsInputRef);
+    if (_jsAudioRef) napi_delete_reference(_env, _jsAudioRef);
+    if (_jsVideoRef) napi_delete_reference(_env, _jsVideoRef);
+    if (_jsSubtitlesRef) napi_delete_reference(_env, _jsSubtitlesRef);
+    if (_jsPlaylistRef) napi_delete_reference(_env, _jsPlaylistRef);
 }
 
-void JsVlcPlayer::close()
-{
+void JsVlcPlayer::close() {
     _player.unregister_callback(this);
     VlcVideoOutput::close();
-
     _player.close();
 
     _async.data = nullptr;
@@ -485,271 +328,137 @@ void JsVlcPlayer::close()
     }
 }
 
-void JsVlcPlayer::media_player_event(const libvlc_event_t* e)
-{
-    _asyncDataGuard.lock();
+void JsVlcPlayer::media_player_event(const libvlc_event_t* e) {
+    std::lock_guard<std::mutex> lock(_asyncDataGuard);
     _asyncData.emplace_back(new LibvlcEvent(*e));
-    _asyncDataGuard.unlock();
     uv_async_send(&_async);
 }
 
-void JsVlcPlayer::log_event_wrapper(
-    void *data,
-    int level,
-    const libvlc_log_t* ctx,
-    const char* fmt,
-    va_list args)
-{
+void JsVlcPlayer::log_event_wrapper(void *data, int level, const libvlc_log_t* ctx, const char* fmt, va_list args) {
     ((JsVlcPlayer *)data)->log_event(level, ctx, fmt, args);
 }
 
 #ifndef _MSC_VER
-inline int _vscprintf(const char* format, va_list argptr)
-{
+inline int _vscprintf(const char* format, va_list argptr) {
     return vsnprintf(nullptr, 0, format, argptr);
 }
 #endif
 
-void JsVlcPlayer::log_event(
-    int level,
-    const libvlc_log_t* ctx,
-    const char* fmt,
-    va_list args)
-{
+void JsVlcPlayer::log_event(int level, const libvlc_log_t* ctx, const char* fmt, va_list args) {
     va_list argsCopy;
     va_copy(argsCopy, args);
     int messageSize = _vscprintf(fmt, argsCopy);
     va_end(argsCopy);
 
-    // If the format string is bad, there is nothing we'll ever be able to do.
-    if(messageSize <= 0)
-        return;
+    if(messageSize <= 0) return;
 
     std::string message(messageSize + 1, '\0');
-    // vsnprintf is a bit of a mess in Microsoft-land, older versions do not guarantee termination.
     vsnprintf(&message[0], message.size(), fmt, args);
-    while('\0' == message[message.size() - 1])
-        message.resize(message.size() - 1);
+    message.resize(strlen(message.c_str()));
 
-    _asyncDataGuard.lock();
+    std::lock_guard<std::mutex> lock(_asyncDataGuard);
     _asyncData.emplace_back(new LibvlcLogEvent(level, message, fmt));
-    _asyncDataGuard.unlock();
-
     uv_async_send(&_async);
 }
 
-void JsVlcPlayer::handleAsync()
-{
-    while(!_asyncData.empty()) {
-        std::deque<std::unique_ptr<AsyncData> > tmpData;
-        _asyncDataGuard.lock();
+void JsVlcPlayer::handleAsync() {
+    std::deque<std::unique_ptr<AsyncData>> tmpData;
+    {
+        std::lock_guard<std::mutex> lock(_asyncDataGuard);
         _asyncData.swap(tmpData);
-        _asyncDataGuard.unlock();
-        for(const auto& i: tmpData) {
-            i->process(this);
-
-            //events queue could be very long...
-            if(VlcVideoOutput::isFrameReady()) {
-                onFrameReady();
-            }
+    }
+    for(const auto& i: tmpData) {
+        i->process(this);
+        if(VlcVideoOutput::isFrameReady()) {
+            onFrameReady();
         }
     }
 }
 
-void* JsVlcPlayer::onFrameSetup(const RV32VideoFrame& videoFrame)
-{
-    using namespace v8;
+void* JsVlcPlayer::onFrameSetup(const RV32VideoFrame& videoFrame) {
+    if(0 == videoFrame.width() || 0 == videoFrame.height() || 0 == videoFrame.size()) return nullptr;
 
-    if(0 == videoFrame.width() || 0 == videoFrame.height() || 0 == videoFrame.size()) {
-        assert(false);
-        return nullptr;
-    }
+    void* buffer_data;
+    napi_value array_buffer;
+    napi_create_arraybuffer(_env, videoFrame.size(), &buffer_data, &array_buffer);
 
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
+    napi_value typed_array;
+    napi_create_typedarray(_env, napi_uint8_array, videoFrame.size(), array_buffer, 0, &typed_array);
 
-    Local<Object> global = isolate->GetCurrentContext()->Global();
+    napi_set_named_property(_env, typed_array, "width", ToNapiValue(_env, (int32_t)videoFrame.width()));
+    napi_set_named_property(_env, typed_array, "height", ToNapiValue(_env, (int32_t)videoFrame.height()));
+    napi_set_named_property(_env, typed_array, "pixelFormat", ToNapiValue(_env, (int32_t)PixelFormat::RV32));
 
-    Local<Value> abv =
-        global->Get(
-            context,
-            String::NewFromUtf8(
-                isolate,
-                "Uint8Array",
-                NewStringType::kInternalized).ToLocalChecked()).ToLocalChecked();
-    Local<Value> argv[] =
-        { Integer::NewFromUnsigned(isolate, videoFrame.size()) };
-    Local<Uint8Array> jsArray =
-        Handle<Uint8Array>::Cast(
-            Handle<Function>::Cast(abv)->NewInstance(context, 1, argv).ToLocalChecked());
+    if (_jsFrameBufferRef) napi_delete_reference(_env, _jsFrameBufferRef);
+    napi_create_reference(_env, typed_array, 1, &_jsFrameBufferRef);
 
-    Local<Integer> jsWidth = Integer::New(isolate, videoFrame.width());
-    Local<Integer> jsHeight = Integer::New(isolate, videoFrame.height());
-    Local<Integer> jsPixelFormat = Integer::New(isolate, static_cast<int>(PixelFormat::RV32));
+    callCallback(CB_FrameSetup, {
+        ToNapiValue(_env, (int32_t)videoFrame.width()),
+        ToNapiValue(_env, (int32_t)videoFrame.height()),
+        ToNapiValue(_env, (int32_t)PixelFormat::RV32),
+        typed_array
+    });
 
-    jsArray->DefineOwnProperty(
-        context,
-        String::NewFromUtf8(isolate, "width", NewStringType::kInternalized).ToLocalChecked(),
-        jsWidth,
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete)).FromJust();
-    jsArray->DefineOwnProperty(
-        context,
-        String::NewFromUtf8(isolate, "height", NewStringType::kInternalized).ToLocalChecked(),
-        jsHeight,
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete)).FromJust();
-    jsArray->DefineOwnProperty(
-        context,
-        String::NewFromUtf8(isolate, "pixelFormat", NewStringType::kInternalized).ToLocalChecked(),
-        jsPixelFormat,
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete)).FromJust();
-
-    _jsFrameBuffer.Reset(isolate, jsArray);
-
-    callCallback(CB_FrameSetup, { jsWidth, jsHeight, jsPixelFormat, jsArray });
-
-#ifdef USE_ARRAY_BUFFER
-    v8::Local<v8::Object> local;
-    node::Buffer::New(isolate, jsArray->Buffer(), 0, jsArray->Buffer()->ByteLength()).ToLocal(&local);
-    return node::Buffer::Data(local);
-#else
-    return jsArray->GetIndexedPropertiesExternalArrayData();
-#endif
+    return buffer_data;
 }
 
-void* JsVlcPlayer::onFrameSetup(const I420VideoFrame& videoFrame)
-{
-    using namespace v8;
+void* JsVlcPlayer::onFrameSetup(const I420VideoFrame& videoFrame) {
+    if(0 == videoFrame.width() || 0 == videoFrame.height() || 0 == videoFrame.size()) return nullptr;
 
-    if(0 == videoFrame.width() || 0 == videoFrame.height() ||
-        0 == videoFrame.uPlaneOffset() || 0 == videoFrame.vPlaneOffset() ||
-        0 == videoFrame.size())
-    {
-        assert(false);
-        return nullptr;
-    }
+    void* buffer_data;
+    napi_value array_buffer;
+    napi_create_arraybuffer(_env, videoFrame.size(), &buffer_data, &array_buffer);
 
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
+    napi_value typed_array;
+    napi_create_typedarray(_env, napi_uint8_array, videoFrame.size(), array_buffer, 0, &typed_array);
 
-    Local<Object> global = isolate->GetCurrentContext()->Global();
+    napi_set_named_property(_env, typed_array, "width", ToNapiValue(_env, (int32_t)videoFrame.width()));
+    napi_set_named_property(_env, typed_array, "height", ToNapiValue(_env, (int32_t)videoFrame.height()));
+    napi_set_named_property(_env, typed_array, "pixelFormat", ToNapiValue(_env, (int32_t)PixelFormat::I420));
+    napi_set_named_property(_env, typed_array, "uOffset", ToNapiValue(_env, (uint32_t)videoFrame.uPlaneOffset()));
+    napi_set_named_property(_env, typed_array, "vOffset", ToNapiValue(_env, (uint32_t)videoFrame.vPlaneOffset()));
 
-    Local<Value> abv =
-        global->Get(
-            context,
-            String::NewFromUtf8(
-                isolate,
-                "Uint8Array",
-                NewStringType::kInternalized
-            ).ToLocalChecked()
-        ).ToLocalChecked();
-    Local<Value> argv[] =
-        { Integer::NewFromUnsigned(isolate, videoFrame.size()) };
-    Local<Uint8Array> jsArray =
-        Handle<Uint8Array>::Cast(
-            Handle<Function>::Cast(abv)->NewInstance(context, 1, argv).ToLocalChecked());
+    if (_jsFrameBufferRef) napi_delete_reference(_env, _jsFrameBufferRef);
+    napi_create_reference(_env, typed_array, 1, &_jsFrameBufferRef);
 
-    Local<Integer> jsWidth = Integer::New(isolate, videoFrame.width());
-    Local<Integer> jsHeight = Integer::New(isolate, videoFrame.height());
-    Local<Integer> jsPixelFormat = Integer::New(isolate, static_cast<int>(PixelFormat::I420));
+    callCallback(CB_FrameSetup, {
+        ToNapiValue(_env, (int32_t)videoFrame.width()),
+        ToNapiValue(_env, (int32_t)videoFrame.height()),
+        ToNapiValue(_env, (int32_t)PixelFormat::I420),
+        typed_array
+    });
 
-    jsArray->DefineOwnProperty(
-        context,
-        String::NewFromUtf8(isolate, "width", NewStringType::kInternalized).ToLocalChecked(),
-        jsWidth,
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete)).FromJust();
-    jsArray->DefineOwnProperty(
-        context,
-        String::NewFromUtf8(isolate, "height", NewStringType::kInternalized).ToLocalChecked(),
-        jsHeight,
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete)).FromJust();
-    jsArray->DefineOwnProperty(
-        context,
-        String::NewFromUtf8(isolate, "pixelFormat", NewStringType::kInternalized).ToLocalChecked(),
-        jsPixelFormat,
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete)).FromJust();
-    jsArray->DefineOwnProperty(
-        context,
-        String::NewFromUtf8(isolate, "uOffset", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, videoFrame.uPlaneOffset()),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete)).FromJust();
-    jsArray->DefineOwnProperty(
-        context,
-        String::NewFromUtf8(isolate, "vOffset", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, videoFrame.vPlaneOffset()),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete)).FromJust();
-
-    _jsFrameBuffer.Reset(isolate, jsArray);
-
-    callCallback(CB_FrameSetup, { jsWidth, jsHeight, jsPixelFormat, jsArray });
-
-#ifdef USE_ARRAY_BUFFER
-    v8::Local<v8::Object> local;
-    node::Buffer::New(isolate, jsArray->Buffer(), 0, jsArray->Buffer()->ByteLength()).ToLocal(&local);
-    return node::Buffer::Data(local);
-#else
-    return jsArray->GetIndexedPropertiesExternalArrayData();
-#endif
+    return buffer_data;
 }
 
-void JsVlcPlayer::onFrameReady()
-{
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
-
-    assert(!_jsFrameBuffer.IsEmpty()); //FIXME! maybe it worth add condition here
-    callCallback(CB_FrameReady, { Local<Value>::New(Isolate::GetCurrent(), _jsFrameBuffer) });
+void JsVlcPlayer::onFrameReady() {
+    if (!_jsFrameBufferRef) return;
+    napi_value frame;
+    napi_get_reference_value(_env, _jsFrameBufferRef, &frame);
+    callCallback(CB_FrameReady, { frame });
 }
 
-void JsVlcPlayer::onFrameCleanup()
-{
+void JsVlcPlayer::onFrameCleanup() {
     callCallback(CB_FrameCleanup);
 }
 
-void JsVlcPlayer::handleLibvlcEvent(const libvlc_event_t& libvlcEvent)
-{
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
-
+void JsVlcPlayer::handleLibvlcEvent(const libvlc_event_t& libvlcEvent) {
     Callbacks_e callback = CB_Max;
+    std::vector<napi_value> args;
 
     switch(libvlcEvent.type) {
-        case libvlc_MediaPlayerMediaChanged:
-            callback = CB_MediaPlayerMediaChanged;
+        case libvlc_MediaPlayerMediaChanged: callback = CB_MediaPlayerMediaChanged; break;
+        case libvlc_MediaPlayerNothingSpecial: callback = CB_MediaPlayerNothingSpecial; break;
+        case libvlc_MediaPlayerOpening: callback = CB_MediaPlayerOpening; break;
+        case libvlc_MediaPlayerBuffering:
+            callback = CB_MediaPlayerBuffering;
+            args.push_back(ToNapiValue(_env, (double)libvlcEvent.u.media_player_buffering.new_cache));
             break;
-        case libvlc_MediaPlayerNothingSpecial:
-            callback = CB_MediaPlayerNothingSpecial;
-            break;
-        case libvlc_MediaPlayerOpening:
-            callback = CB_MediaPlayerOpening;
-            break;
-        case libvlc_MediaPlayerBuffering: {
-            callCallback(
-                CB_MediaPlayerBuffering,
-                { Number::New(
-                    isolate,
-                    libvlcEvent.u.media_player_buffering.new_cache)
-                });
-            break;
-        }
-        case libvlc_MediaPlayerPlaying:
-            callback = CB_MediaPlayerPlaying;
-            break;
-        case libvlc_MediaPlayerPaused:
-            callback = CB_MediaPlayerPaused;
-            break;
-        case libvlc_MediaPlayerStopped:
-            callback = CB_MediaPlayerStopped;
-            break;
-        case libvlc_MediaPlayerForward:
-            callback = CB_MediaPlayerForward;
-            break;
-        case libvlc_MediaPlayerBackward:
-            callback = CB_MediaPlayerBackward;
-            break;
+        case libvlc_MediaPlayerPlaying: callback = CB_MediaPlayerPlaying; break;
+        case libvlc_MediaPlayerPaused: callback = CB_MediaPlayerPaused; break;
+        case libvlc_MediaPlayerStopped: callback = CB_MediaPlayerStopped; break;
+        case libvlc_MediaPlayerForward: callback = CB_MediaPlayerForward; break;
+        case libvlc_MediaPlayerBackward: callback = CB_MediaPlayerBackward; break;
         case libvlc_MediaPlayerEndReached:
             callback = CB_MediaPlayerEndReached;
             uv_timer_stop(&_errorTimer);
@@ -757,313 +466,163 @@ void JsVlcPlayer::handleLibvlcEvent(const libvlc_event_t& libvlcEvent)
             break;
         case libvlc_MediaPlayerEncounteredError:
             callback = CB_MediaPlayerEncounteredError;
-            //sometimes libvlc do some internal error handling
-            //and sends EndReached after that,
-            //so we have to wait it some time,
-            //to not break playlist ligic.
-            uv_timer_start(&_errorTimer,
-                [] (uv_timer_t* handle) {
-                    if(handle->data)
-                        static_cast<JsVlcPlayer*>(handle->data)->currentItemEndReached();
-                }, 1000, 0);
+            uv_timer_start(&_errorTimer, [](uv_timer_t* handle) {
+                if(handle->data) static_cast<JsVlcPlayer*>(handle->data)->currentItemEndReached();
+            }, 1000, 0);
             break;
-        case libvlc_MediaPlayerTimeChanged: {
-            const double new_time =
-                static_cast<double>(libvlcEvent.u.media_player_time_changed.new_time);
-            callCallback(
-                CB_MediaPlayerTimeChanged,
-                { Number::New(isolate, static_cast<double>(new_time)) });
+        case libvlc_MediaPlayerTimeChanged:
+            callback = CB_MediaPlayerTimeChanged;
+            args.push_back(ToNapiValue(_env, (double)libvlcEvent.u.media_player_time_changed.new_time));
             break;
-        }
-        case libvlc_MediaPlayerPositionChanged: {
-            callCallback(
-                CB_MediaPlayerPositionChanged,
-                { Number::New(
-                    isolate,
-                    libvlcEvent.u.media_player_position_changed.new_position)
-                });
+        case libvlc_MediaPlayerPositionChanged:
+            callback = CB_MediaPlayerPositionChanged;
+            args.push_back(ToNapiValue(_env, (double)libvlcEvent.u.media_player_position_changed.new_position));
             break;
-        }
-        case libvlc_MediaPlayerSeekableChanged: {
-            callCallback(
-                CB_MediaPlayerSeekableChanged,
-                { Boolean::New(
-                    isolate,
-                    libvlcEvent.u.media_player_seekable_changed.new_seekable != 0)
-                });
+        case libvlc_MediaPlayerSeekableChanged:
+            callback = CB_MediaPlayerSeekableChanged;
+            args.push_back(ToNapiValue(_env, (bool)libvlcEvent.u.media_player_seekable_changed.new_seekable));
             break;
-        }
-        case libvlc_MediaPlayerPausableChanged: {
-            callCallback(
-                CB_MediaPlayerPausableChanged,
-                { Boolean::New(
-                    isolate,
-                    libvlcEvent.u.media_player_pausable_changed.new_pausable != 0)
-                });
+        case libvlc_MediaPlayerPausableChanged:
+            callback = CB_MediaPlayerPausableChanged;
+            args.push_back(ToNapiValue(_env, (bool)libvlcEvent.u.media_player_pausable_changed.new_pausable));
             break;
-        }
-        case libvlc_MediaPlayerLengthChanged: {
-            const double new_length =
-                static_cast<double>(libvlcEvent.u.media_player_length_changed.new_length);
-            callCallback(CB_MediaPlayerLengthChanged, { Number::New(isolate, new_length) });
+        case libvlc_MediaPlayerLengthChanged:
+            callback = CB_MediaPlayerLengthChanged;
+            args.push_back(ToNapiValue(_env, (double)libvlcEvent.u.media_player_length_changed.new_length));
             break;
-        }
     }
 
     if(callback != CB_Max) {
-        callCallback(callback);
+        callCallback(callback, std::initializer_list<napi_value>(args.data(), args.data() + args.size()));
     }
 }
 
-void JsVlcPlayer::currentItemEndReached()
-{
+void JsVlcPlayer::currentItemEndReached() {
     if(vlc::mode_single != player().get_playback_mode())
         player().next();
 }
 
-void JsVlcPlayer::callCallback(
-    Callbacks_e callback,
-    std::initializer_list<v8::Local<v8::Value> > list)
-{
-    using namespace v8;
+napi_value JsVlcPlayer::jsPlay(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_value this_arg;
+    napi_get_cb_info(env, info, &argc, args, &this_arg, nullptr);
 
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
+    JsVlcPlayer* jsPlayer;
+    napi_unwrap(env, this_arg, (void**)&jsPlayer);
 
-    std::vector<Local<Value> > argList;
-    argList.reserve(list.size());
-    argList.push_back(
-        String::NewFromUtf8(
-            isolate,
-            callbackNames[callback],
-            NewStringType::kInternalized).ToLocalChecked());
-    if(list.size() > 0)
-        argList.insert(argList.end(), list);
-
-    if(!_jsCallbacks[callback].IsEmpty()) {
-        Local<Function> callbackFunc =
-            Local<Function>::New(isolate, _jsCallbacks[callback]);
-
-        callbackFunc->Call(
-            context,
-            handle(),
-            static_cast<int>(argList.size() - 1), argList.data() + 1).ToLocalChecked();
-    }
-
-    Local<Object> eventEmitter = getEventEmitter();
-
-    Local<Function> emitFunction =
-        Local<Function>::Cast(
-            eventEmitter->Get(
-                context,
-                String::NewFromUtf8(isolate, "emit", NewStringType::kInternalized).ToLocalChecked()
-            ).ToLocalChecked());
-
-    auto eNull = emitFunction->IsNullOrUndefined();
-    if(!emitFunction->IsNullOrUndefined()) {
-        emitFunction->Call(
-            context,
-            eventEmitter,
-            static_cast<int>(argList.size()),
-            argList.data()).ToLocalChecked();
-    }
-}
-
-void JsVlcPlayer::jsPlay(const v8::FunctionCallbackInfo<v8::Value>& args)
-{
-    using namespace v8;
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
-
-    JsVlcPlayer* jsPlayer = ObjectWrap::Unwrap<JsVlcPlayer>(args.Holder());
-
-    if(args.Length() == 0) {
+    if(argc == 0) {
         jsPlayer->play();
-    } else if(args.Length() ==  1) {
-        String::Utf8Value mrl(isolate, args[0]);
-        if(mrl.length()) {
-            jsPlayer->play(*mrl);
-        }
+    } else if(argc == 1) {
+        jsPlayer->play(FromNapiValue<std::string>(env, args[0]));
+    }
+    return nullptr;
+}
+
+template<JsVlcPlayer::Callbacks_e C>
+napi_value JsVlcPlayer::getJsCallback(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcPlayer* p;
+    napi_unwrap(env, this_arg, (void**)&p);
+    return p->getJsCallback(env, C);
+}
+
+template<JsVlcPlayer::Callbacks_e C>
+napi_value JsVlcPlayer::setJsCallback(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_value this_arg;
+    napi_get_cb_info(env, info, &argc, args, &this_arg, nullptr);
+    JsVlcPlayer* p;
+    napi_unwrap(env, this_arg, (void**)&p);
+    if (argc > 0) {
+        p->setJsCallback(env, args[0], C);
+    }
+    return nullptr;
+}
+
+napi_value JsVlcPlayer::getJsCallback(napi_env env, Callbacks_e callback) {
+    if (_jsCallbacks[callback]) {
+        napi_value cb_func;
+        napi_get_reference_value(env, _jsCallbacks[callback], &cb_func);
+        return cb_func;
+    }
+    return nullptr;
+}
+
+void JsVlcPlayer::setJsCallback(napi_env env, napi_value value, Callbacks_e callback) {
+    if (_jsCallbacks[callback]) {
+        napi_delete_reference(env, _jsCallbacks[callback]);
+        _jsCallbacks[callback] = nullptr;
+    }
+    napi_valuetype valuetype;
+    napi_typeof(env, value, &valuetype);
+    if (valuetype == napi_function) {
+        napi_create_reference(env, value, 1, &_jsCallbacks[callback]);
     }
 }
 
-void JsVlcPlayer::getJsCallback(
-    v8::Local<v8::String> property,
-    const v8::PropertyCallbackInfo<v8::Value>& info,
-    Callbacks_e callback)
-{
-    using namespace v8;
+void JsVlcPlayer::callCallback(Callbacks_e callback, std::initializer_list<napi_value> list) {
+    napi_value global;
+    napi_get_global(_env, &global);
 
-    JsVlcPlayer* jsPlayer = ObjectWrap::Unwrap<JsVlcPlayer>(info.Holder());
+    std::vector<napi_value> argList;
+    argList.reserve(list.size() + 1);
+    argList.push_back(ToNapiValue(_env, callbackNames[callback]));
+    argList.insert(argList.end(), list);
 
-    if(jsPlayer->_jsCallbacks[callback].IsEmpty())
-        return;
+    if(_jsCallbacks[callback]) {
+        napi_value cb_func;
+        napi_get_reference_value(_env, _jsCallbacks[callback], &cb_func);
+        napi_value this_arg;
+        napi_get_reference_value(_env, _wrapper, &this_arg);
+        napi_call_function(_env, this_arg, cb_func, argList.size() - 1, argList.data() + 1, nullptr);
+    }
 
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
-
-    Local<Function> callbackFunc =
-        Local<Function>::New(isolate, jsPlayer->_jsCallbacks[callback]);
-
-    info.GetReturnValue().Set(callbackFunc);
-}
-
-void JsVlcPlayer::setJsCallback(
-    v8::Local<v8::String> property,
-    v8::Local<v8::Value> value,
-    const v8::PropertyCallbackInfo<void>& info,
-    Callbacks_e callback)
-{
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
-
-    JsVlcPlayer* jsPlayer = ObjectWrap::Unwrap<JsVlcPlayer>(info.Holder());
-
-    Local<Function> callbackFunc = Local<Function>::Cast(value);
-    if(!callbackFunc.IsEmpty())
-        jsPlayer->_jsCallbacks[callback].Reset(isolate, callbackFunc);
-}
-
-bool JsVlcPlayer::playing()
-{
-    return player().is_playing();
-}
-
-double JsVlcPlayer::length()
-{
-    return static_cast<double>(player().playback().get_length());
-}
-
-unsigned JsVlcPlayer::state()
-{
-    return player().get_state();
-}
-
-v8::Local<v8::Value> JsVlcPlayer::getVideoFrame()
-{
-    return v8::Local<v8::Value>::New(v8::Isolate::GetCurrent(), _jsFrameBuffer);
-}
-
-v8::Local<v8::Object> JsVlcPlayer::getEventEmitter()
-{
-    return v8::Local<v8::Object>::New(v8::Isolate::GetCurrent(), _jsEventEmitter);
-}
-
-unsigned JsVlcPlayer::pixelFormat()
-{
-    return static_cast<unsigned>(VlcVideoOutput::pixelFormat());
-}
-
-void JsVlcPlayer::setPixelFormat(unsigned format)
-{
-    switch(format) {
-        case static_cast<unsigned>(PixelFormat::RV32):
-            VlcVideoOutput::setPixelFormat(PixelFormat::RV32);
-            break;
-        case static_cast<unsigned>(PixelFormat::I420):
-            VlcVideoOutput::setPixelFormat(PixelFormat::I420);
-            break;
+    if (_jsEventEmitterRef) {
+        napi_value eventEmitter;
+        napi_get_reference_value(_env, _jsEventEmitterRef, &eventEmitter);
+        napi_value emit_func;
+        napi_get_named_property(_env, eventEmitter, "emit", &emit_func);
+        napi_call_function(_env, eventEmitter, emit_func, argList.size(), argList.data(), nullptr);
     }
 }
 
-double JsVlcPlayer::position()
-{
-    return player().playback().get_position();
-}
-
-void JsVlcPlayer::setPosition(double position)
-{
-    player().playback().set_position(static_cast<float>(position));
-}
-
-double JsVlcPlayer::time()
-{
-    return static_cast<double>(player().playback().get_time());
-}
-
-void JsVlcPlayer::setTime(double time)
-{
-    player().playback().set_time(static_cast<libvlc_time_t>(time));
-}
-
-unsigned JsVlcPlayer::volume()
-{
-    return player().audio().get_volume();
-}
-
-void JsVlcPlayer::setVolume(unsigned volume)
-{
-    player().audio().set_volume(volume);
-}
-
-bool JsVlcPlayer::muted()
-{
-    return player().audio().is_muted();
-}
-
-void JsVlcPlayer::setMuted(bool mute)
-{
-    player().audio().set_mute(mute);
-}
-
-void JsVlcPlayer::play()
-{
-    player().play();
-}
-
-void JsVlcPlayer::play(const std::string& mrl)
-{
+void JsVlcPlayer::play() { player().play(); }
+void JsVlcPlayer::play(const std::string& mrl) {
     vlc::player& p = player();
-
     p.clear_items();
     const int idx = p.add_media(mrl.c_str());
-    if(idx >= 0)
-        p.play(idx);
+    if(idx >= 0) p.play(idx);
 }
+void JsVlcPlayer::pause() { player().pause(); }
+void JsVlcPlayer::togglePause() { player().togglePause(); }
+void JsVlcPlayer::stop() { player().stop(); }
+void JsVlcPlayer::toggleMute() { player().audio().toggle_mute(); }
 
-void JsVlcPlayer::pause()
-{
-    player().pause();
+napi_value JsVlcPlayer::input(napi_env env) {
+    napi_value obj;
+    napi_get_reference_value(env, _jsInputRef, &obj);
+    return obj;
 }
-
-void JsVlcPlayer::togglePause()
-{
-    player().togglePause();
+napi_value JsVlcPlayer::audio(napi_env env) {
+    napi_value obj;
+    napi_get_reference_value(env, _jsAudioRef, &obj);
+    return obj;
 }
-
-void JsVlcPlayer::stop()
-{
-    player().stop();
+napi_value JsVlcPlayer::video(napi_env env) {
+    napi_value obj;
+    napi_get_reference_value(env, _jsVideoRef, &obj);
+    return obj;
 }
-
-void JsVlcPlayer::toggleMute()
-{
-    player().audio().toggle_mute();
+napi_value JsVlcPlayer::subtitles(napi_env env) {
+    napi_value obj;
+    napi_get_reference_value(env, _jsSubtitlesRef, &obj);
+    return obj;
 }
-
-v8::Local<v8::Object> JsVlcPlayer::input()
-{
-    return v8::Local<v8::Object>::New(v8::Isolate::GetCurrent(), _jsInput);
-}
-
-v8::Local<v8::Object> JsVlcPlayer::audio()
-{
-    return v8::Local<v8::Object>::New(v8::Isolate::GetCurrent(), _jsAudio);
-}
-
-v8::Local<v8::Object> JsVlcPlayer::video()
-{
-    return v8::Local<v8::Object>::New(v8::Isolate::GetCurrent(), _jsVideo);
-}
-
-v8::Local<v8::Object> JsVlcPlayer::subtitles()
-{
-    return v8::Local<v8::Object>::New(v8::Isolate::GetCurrent(), _jsSubtitles);
-}
-
-v8::Local<v8::Object> JsVlcPlayer::playlist()
-{
-    return v8::Local<v8::Object>::New(v8::Isolate::GetCurrent(), _jsPlaylist);
+napi_value JsVlcPlayer::playlist(napi_env env) {
+    napi_value obj;
+    napi_get_reference_value(env, _jsPlaylistRef, &obj);
+    return obj;
 }

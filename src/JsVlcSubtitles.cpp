@@ -3,141 +3,114 @@
 #include "NodeTools.h"
 #include "JsVlcPlayer.h"
 
-v8::Persistent<v8::Function> JsVlcSubtitles::_jsConstructor;
+napi_ref JsVlcSubtitles::_jsConstructor = nullptr;
 
-void JsVlcSubtitles::initJsApi()
+void JsVlcSubtitles::initJsApi(napi_env env)
 {
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    HandleScope scope(isolate);
-    Local<Context> context = isolate->GetCurrentContext();
-
-    Local<FunctionTemplate> constructorTemplate = FunctionTemplate::New(isolate, jsCreate);
-    constructorTemplate->SetClassName(
-        String::NewFromUtf8(isolate, "VlcSubtitles", NewStringType::kInternalized).ToLocalChecked());
-
-    Local<ObjectTemplate> protoTemplate = constructorTemplate->PrototypeTemplate();
-    Local<ObjectTemplate> instanceTemplate = constructorTemplate->InstanceTemplate();
-    instanceTemplate->SetInternalFieldCount(1);
-
-    SET_RO_INDEXED_PROPERTY(instanceTemplate, &JsVlcSubtitles::description);
-
-    SET_RO_PROPERTY(instanceTemplate, "count", &JsVlcSubtitles::count);
-
-    SET_RW_PROPERTY(instanceTemplate, "track", &JsVlcSubtitles::track, &JsVlcSubtitles::setTrack);
-    SET_RW_PROPERTY(instanceTemplate, "delay", &JsVlcSubtitles::delay, &JsVlcSubtitles::setDelay);
-
-    SET_METHOD(constructorTemplate, "load", &JsVlcSubtitles::load);
-
-    Local<Function> constructor = constructorTemplate->GetFunction(context).ToLocalChecked();
-    _jsConstructor.Reset(isolate, constructor);
-}
-
-v8::UniquePersistent<v8::Object> JsVlcSubtitles::create(JsVlcPlayer& player)
-{
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
-    HandleScope scope(isolate);
-
-    Local<Function> constructor =
-        Local<Function>::New(isolate, _jsConstructor);
-
-    Local<Value> argv[] = { player.handle() };
-
-    return {
-        isolate,
-        constructor->NewInstance(context, sizeof(argv) / sizeof(argv[0]), argv).ToLocalChecked()
+    napi_property_descriptor properties[] = {
+        DECLARE_NAPI_GETTER("count", get_count),
+        DECLARE_NAPI_PROPERTY("track", get_track, set_track),
+        DECLARE_NAPI_PROPERTY("delay", get_delay, set_delay),
     };
+
+    napi_value constructor;
+    napi_define_class(env, "VlcSubtitles", NAPI_AUTO_LENGTH, jsCreate, nullptr, sizeof(properties) / sizeof(properties[0]), properties, &constructor);
+    napi_create_reference(env, constructor, 1, &_jsConstructor);
 }
 
-void JsVlcSubtitles::jsCreate(const v8::FunctionCallbackInfo<v8::Value>& args)
+napi_ref JsVlcSubtitles::create(JsVlcPlayer& player, napi_env env)
 {
-    using namespace v8;
+    napi_value cons;
+    napi_get_reference_value(env, _jsConstructor, &cons);
 
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
-    HandleScope scope(isolate);
+    napi_value external_player;
+    napi_create_external(env, &player, nullptr, nullptr, &external_player);
 
-    Local<Object> thisObject = args.Holder();
-    if(args.IsConstructCall() && thisObject->InternalFieldCount() > 0) {
-        JsVlcPlayer* jsPlayer =
-            ObjectWrap::Unwrap<JsVlcPlayer>(Handle<Object>::Cast(args[0]));
-        if(jsPlayer) {
-            JsVlcSubtitles* jsPlaylist = new JsVlcSubtitles(thisObject, jsPlayer);
-            args.GetReturnValue().Set(thisObject);
-        }
-    } else {
-        Local<Function> constructor =
-            Local<Function>::New(isolate, _jsConstructor);
-        Local<Value> argv[] = { args[0] };
-        args.GetReturnValue().Set(
-            constructor->NewInstance(context, sizeof(argv) / sizeof(argv[0]), argv).ToLocalChecked());
+    napi_value instance;
+    napi_new_instance(env, cons, 1, &external_player, &instance);
+
+    napi_ref instance_ref;
+    napi_create_reference(env, instance, 1, &instance_ref);
+    return instance_ref;
+}
+
+napi_value JsVlcSubtitles::jsCreate(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1];
+    napi_value this_arg;
+    napi_get_cb_info(env, info, &argc, args, &this_arg, nullptr);
+
+    JsVlcPlayer* jsPlayer;
+    napi_get_value_external(env, args[0], (void**)&jsPlayer);
+
+    JsVlcSubtitles* obj = new JsVlcSubtitles(jsPlayer);
+    napi_wrap(env, this_arg, obj, jsFinalize, nullptr, &obj->_wrapper);
+
+    return this_arg;
+}
+
+void JsVlcSubtitles::jsFinalize(napi_env env, void* data, void* hint) {
+    delete static_cast<JsVlcSubtitles*>(data);
+}
+
+JsVlcSubtitles::JsVlcSubtitles(JsVlcPlayer* jsPlayer) :
+    _jsPlayer(jsPlayer), _wrapper(nullptr)
+{
+}
+
+unsigned JsVlcSubtitles::count() { return _jsPlayer->player().subtitles().track_count(); }
+int JsVlcSubtitles::track() { return _jsPlayer->player().subtitles().get_track(); }
+void JsVlcSubtitles::setTrack(int track) { _jsPlayer->player().subtitles().set_track(track); }
+int JsVlcSubtitles::delay() { return static_cast<int>(_jsPlayer->player().subtitles().get_delay()); }
+void JsVlcSubtitles::setDelay(int delay) { _jsPlayer->player().subtitles().set_delay(delay); }
+
+napi_value JsVlcSubtitles::get_count(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcSubtitles* obj;
+    napi_unwrap(env, this_arg, (void**)&obj);
+    return ToNapiValue(env, obj->count());
+}
+
+napi_value JsVlcSubtitles::get_track(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcSubtitles* obj;
+    napi_unwrap(env, this_arg, (void**)&obj);
+    return ToNapiValue(env, obj->track());
+}
+
+napi_value JsVlcSubtitles::set_track(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_value this_arg;
+    napi_get_cb_info(env, info, &argc, args, &this_arg, nullptr);
+    JsVlcSubtitles* obj;
+    napi_unwrap(env, this_arg, (void**)&obj);
+    if (argc > 0) {
+        obj->setTrack(FromNapiValue<int32_t>(env, args[0]));
     }
+    return nullptr;
 }
 
-JsVlcSubtitles::JsVlcSubtitles(
-    v8::Local<v8::Object>& thisObject, JsVlcPlayer* jsPlayer) :
-    _jsPlayer(jsPlayer)
-{
-    Wrap(thisObject);
+napi_value JsVlcSubtitles::get_delay(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcSubtitles* obj;
+    napi_unwrap(env, this_arg, (void**)&obj);
+    return ToNapiValue(env, obj->delay());
 }
 
-std::string JsVlcSubtitles::description(uint32_t index)
-{
-    vlc_player& p = _jsPlayer->player();
-
-    std::string name;
-
-    libvlc_track_description_t* rootDesc =
-        libvlc_video_get_spu_description(p.get_mp());
-    if(!rootDesc)
-        return name;
-
-    unsigned count = libvlc_video_get_spu_count(p.get_mp());
-    if(count && index < count) {
-        libvlc_track_description_t* desc = rootDesc;
-        for(; index && desc; --index){
-            desc = desc->p_next;
-        }
-
-        if (desc && desc->psz_name) {
-            name = desc->psz_name;
-        }
+napi_value JsVlcSubtitles::set_delay(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_value this_arg;
+    napi_get_cb_info(env, info, &argc, args, &this_arg, nullptr);
+    JsVlcSubtitles* obj;
+    napi_unwrap(env, this_arg, (void**)&obj);
+    if (argc > 0) {
+        obj->setDelay(FromNapiValue<int32_t>(env, args[0]));
     }
-    libvlc_track_description_list_release(rootDesc);
-
-    return name;
-}
-
-unsigned JsVlcSubtitles::count()
-{
-    return _jsPlayer->player().subtitles().track_count();
-}
-
-int JsVlcSubtitles::track()
-{
-    return _jsPlayer->player().subtitles().get_track();
-}
-
-void JsVlcSubtitles::setTrack(int track)
-{
-    return _jsPlayer->player().subtitles().set_track(track);
-}
-
-int JsVlcSubtitles::delay()
-{
-    return static_cast<int>(_jsPlayer->player().subtitles().get_delay());
-}
-
-void JsVlcSubtitles::setDelay(int delay)
-{
-    _jsPlayer->player().subtitles().set_delay(delay);
-}
-
-bool JsVlcSubtitles::load(const std::string& path)
-{
-    return _jsPlayer->player().subtitles().load(path);
+    return nullptr;
 }

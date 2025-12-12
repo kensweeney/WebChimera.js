@@ -2,12 +2,23 @@
     "targets": [{
             "target_name": "webchimera.js",
             "sources": [
-                "deps/libvlc_wrapper/libvlc-sdk/include",
-                "deps/libvlc_wrapper",
-				"src"
+                "src/JsVlcAudio.cpp",
+                "src/JsVlcDeinterlace.cpp",
+                "src/JsVlcInput.cpp",
+                "src/JsVlcPlayer.cpp",
+                "src/JsVlcPlaylist.cpp",
+                "src/JsVlcSubtitles.cpp",
+                "src/JsVlcVideo.cpp",
+                "src/NodeTools.cpp",
+                "src/WebChimera.cpp"
             ],
             "include_dirs": [
-                "src/webchimera.cpp"
+                "<!(node -e \"require('node-addon-api')\")",
+                "deps/libvlc_wrapper",
+                "src"
+            ],
+            "dependencies": [
+                "deps/libvlc_wrapper/binding.gyp:libvlc_wrapper"
             ],
             "cflags_cc!": ["-fno-exceptions"],
             "defines": ["NAPI_DISABLE_CPP_EXCEPTIONS"],

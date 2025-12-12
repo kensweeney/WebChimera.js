@@ -1,28 +1,30 @@
 #pragma once
 
+#include <node_api.h>
 #include <string>
 
-#include <node.h>
-#include <node_object_wrap.h>
+class JsVlcPlayer;
 
-class JsVlcPlayer; //#include "JsVlcPlayer.h"
-
-class JsVlcDeinterlace :
-    public node::ObjectWrap
+class JsVlcDeinterlace
 {
 public:
-    static void initJsApi();
-    static v8::UniquePersistent<v8::Object> create(JsVlcPlayer& player);
+    static void initJsApi(napi_env env);
+    static napi_ref create(JsVlcPlayer& player, napi_env env);
+
+private:
+    JsVlcDeinterlace(JsVlcPlayer* jsPlayer);
+
+    static napi_value jsCreate(napi_env env, napi_callback_info info);
+    static void jsFinalize(napi_env env, void* data, void* hint);
 
     void enable(const std::string& mode);
     void disable();
 
-private:
-    static void jsCreate(const v8::FunctionCallbackInfo<v8::Value>& args);
-    JsVlcDeinterlace(v8::Local<v8::Object>& thisObject, JsVlcPlayer*);
-
-private:
-    static v8::Persistent<v8::Function> _jsConstructor;
+    static napi_value enable(napi_env env, napi_callback_info info);
+    static napi_value disable(napi_env env, napi_callback_info info);
 
     JsVlcPlayer* _jsPlayer;
+    napi_ref _wrapper;
+
+    static napi_ref _jsConstructor;
 };

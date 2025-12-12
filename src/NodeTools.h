@@ -2,236 +2,87 @@
 
 #include <string>
 #include <vector>
+#include <functional>
 
-#include <node.h>
-#include <node_object_wrap.h>
+#include <node_api.h>
 
 #include "Tools.h"
 
+// Forward declaration
+class NapiHelpers;
 
+// N-API type conversion helpers
 template<typename T>
-inline T FromJsValue(const v8::Local<v8::Value>& value)
-{
-    return typename T::Cast(value);
-}
+T FromNapiValue(napi_env env, napi_value value);
 
 template<>
-inline v8::Local<v8::Value> FromJsValue<v8::Local<v8::Value> >(const v8::Local<v8::Value>& value)
-{
-    return value;
-}
+bool FromNapiValue<bool>(napi_env env, napi_value value);
 
 template<>
-inline bool FromJsValue<bool>(const v8::Local<v8::Value>& value)
-{
-    return value->IsTrue();
-}
+uint32_t FromNapiValue<uint32_t>(napi_env env, napi_value value);
 
 template<>
-inline unsigned FromJsValue<unsigned>(const v8::Local<v8::Value>& value)
-{
-    return static_cast<unsigned>(v8::Local<v8::Integer>::Cast(value)->Value());
-}
+int32_t FromNapiValue<int32_t>(napi_env env, napi_value value);
 
 template<>
-inline int FromJsValue<int>(const v8::Local<v8::Value>& value)
-{
-    return static_cast<int>(v8::Local<v8::Integer>::Cast(value)->Value());
-}
+double FromNapiValue<double>(napi_env env, napi_value value);
 
 template<>
-inline double FromJsValue<double>(const v8::Local<v8::Value>& value)
-{
-    return static_cast<double>(v8::Local<v8::Number>::Cast(value)->Value());
-}
+std::string FromNapiValue<std::string>(napi_env env, napi_value value);
 
 template<>
-inline std::string FromJsValue<std::string>(const v8::Local<v8::Value>& value)
-{
-    v8::Isolate* isolate = v8::Isolate::GetCurrent();
-    v8::String::Utf8Value str(isolate, value);
-    if (*str) {
-        return *str;
-    } else {
-        return std::string();
+std::vector<std::string> FromNapiValue<std::vector<std::string>>(napi_env env, napi_value value);
+
+napi_value ToNapiValue(napi_env env, bool value);
+napi_value ToNapiValue(napi_env env, int32_t value);
+napi_value ToNapiValue(napi_env env, uint32_t value);
+napi_value ToNapiValue(napi_env env, double value);
+napi_value ToNapiValue(napi_env env, const std::string& value);
+napi_value ToNapiValue(napi_env env, const char* value);
+
+// Helper for wrapping class methods
+template<typename T>
+class NapiWrappedClass {
+public:
+    static napi_value Constructor(napi_env env, napi_callback_info info) {
+        napi_status status;
+        napi_value target;
+        status = napi_get_new_target(env, info, &target);
+        if (status != napi_ok) return nullptr;
+
+        if (target) {
+            napi_value this_arg;
+            status = napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+            if (status != napi_ok) return nullptr;
+
+            T* obj = new T(env, info); // Assuming constructor signature
+            status = napi_wrap(env, this_arg, obj,
+                [](napi_env env, void* finalize_data, void* finalize_hint) {
+                    T* instance = static_cast<T*>(finalize_data);
+                    delete instance;
+                },
+                nullptr, nullptr);
+            if (status != napi_ok) return nullptr;
+
+            return this_arg;
+        }
+
+        return nullptr;
     }
-}
 
-template<>
-std::vector<std::string> FromJsValue<std::vector<std::string> >(const v8::Local<v8::Value>& value);
+    static void GetFinalize(napi_env env, void* finalize_data, void* finalize_hint) {
+        delete static_cast<T*>(finalize_data);
+    }
+};
 
-inline v8::Local<v8::Value> ToJsValue(const v8::Local<v8::Value>& value)
-{
-    return value;
-}
+// Helper macros for defining N-API properties
+#define DECLARE_NAPI_METHOD(name, func) \
+    { name, nullptr, func, nullptr, nullptr, nullptr, napi_default, nullptr }
 
-inline v8::Local<v8::Value> ToJsValue(bool value)
-{
-    return v8::Boolean::New(v8::Isolate::GetCurrent(), value);
-}
+#define DECLARE_NAPI_GETTER(name, getter) \
+    { name, nullptr, nullptr, getter, nullptr, nullptr, napi_default, nullptr }
 
-inline v8::Local<v8::Value> ToJsValue(int value)
-{
-    return v8::Integer::New(v8::Isolate::GetCurrent(), value);
-}
+#define DECLARE_NAPI_PROPERTY(name, getter, setter) \
+    { name, nullptr, nullptr, getter, setter, nullptr, napi_default, nullptr }
 
-inline v8::Local<v8::Value> ToJsValue(unsigned value)
-{
-    return v8::Integer::New(v8::Isolate::GetCurrent(), value);
-}
-
-inline v8::Local<v8::Value> ToJsValue(double value)
-{
-    return v8::Number::New(v8::Isolate::GetCurrent(), value);
-}
-
-inline v8::Local<v8::Value> ToJsValue(const std::string& value)
-{
-    v8::Isolate* isolate = v8::Isolate::GetCurrent();
-    return v8::String::NewFromUtf8(isolate, value.c_str(), v8::NewStringType::kNormal).ToLocalChecked();
-}
-
-template<typename C, typename ... A, size_t ... I >
-void CallMethod(
-    void (C::* method) (A ...),
-    const v8::FunctionCallbackInfo<v8::Value>& info,
-    StaticSequence<I ...>)
-{
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    HandleScope scope(isolate);
-
-    C* instance = node::ObjectWrap::Unwrap<C>(info.Holder());
-
-    (instance->*method) (
-        FromJsValue<
-            typename std::remove_const<
-                typename std::remove_reference<A>::type>::type >(info[I]) ...);
-}
-
-template<typename R, typename C, typename ... A, size_t ... I >
-void CallMethod(
-    R (C::* method) (A ...),
-    const v8::FunctionCallbackInfo<v8::Value>& info,
-    StaticSequence<I ...>)
-{
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    HandleScope scope(isolate);
-
-    C* instance = node::ObjectWrap::Unwrap<C>(info.Holder());
-
-    info.GetReturnValue().Set(
-        ToJsValue(
-            (instance->*method) (
-                FromJsValue<
-                    typename std::remove_const<
-                        typename std::remove_reference<A>::type
-                    >::type
-                >(info[I]) ...)));
-}
-
-template<typename R, typename C, typename ... A>
-void CallMethod(
-    R (C::* method) (A ...),
-    const v8::FunctionCallbackInfo<v8::Value>& info)
-{
-    typedef typename MakeStaticSequence<sizeof ... (A)>::SequenceType SequenceType;
-    CallMethod(method, info, SequenceType());
-}
-
-template<typename R, typename C>
-void GetPropertyValue(
-    R (C::* getter) (), const v8::PropertyCallbackInfo<v8::Value>& info)
-{
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    HandleScope scope(isolate);
-
-    C* instance = node::ObjectWrap::Unwrap<C>(info.Holder());
-
-    info.GetReturnValue().Set(ToJsValue((instance->*getter) ()));
-}
-
-template<typename C, typename V>
-void SetPropertyValue(
-    void (C::* setter) (V),
-    v8::Local<v8::Value> value,
-    const v8::PropertyCallbackInfo<void>& info)
-{
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    HandleScope scope(isolate);
-
-    C* instance = node::ObjectWrap::Unwrap<C>(info.Holder());
-
-    typedef typename std::remove_const<typename std::remove_reference<V>::type>::type cleanPropType;
-    (instance->*setter) (FromJsValue<cleanPropType>(value));
-}
-
-template<typename R, typename C>
-void GetIndexedPropertyValue(
-    R (C::* getter) (uint32_t index),
-    uint32_t index,
-    const v8::PropertyCallbackInfo<v8::Value>& info)
-{
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    HandleScope scope(isolate);
-
-    C* instance = node::ObjectWrap::Unwrap<C>(info.Holder());
-
-    info.GetReturnValue().Set(ToJsValue((instance->*getter) (index)));
-}
-
-
-#define SET_METHOD(funTemplate, name, member)                  \
-    NODE_SET_PROTOTYPE_METHOD(funTemplate, name,               \
-        [] (const v8::FunctionCallbackInfo<v8::Value>& info) { \
-            CallMethod(member, info);                          \
-        }                                                      \
-    )
-
-#define SET_RO_PROPERTY(objTemplate, name, member)                                         \
-    objTemplate->SetAccessor(                                                              \
-        v8::String::NewFromUtf8(v8::Isolate::GetCurrent(), name, v8::NewStringType::kInternalized).ToLocalChecked(), \
-        [] (v8::Local<v8::String> /*property*/,                                            \
-            const v8::PropertyCallbackInfo<v8::Value>& info)                               \
-        {                                                                                  \
-            GetPropertyValue(member, info);                                                \
-        }                                                                                  \
-   )
-
-#define SET_RW_PROPERTY(objTemplate, name, getter, setter)                                 \
-    objTemplate->SetAccessor(                                                              \
-        v8::String::NewFromUtf8(v8::Isolate::GetCurrent(), name, v8::NewStringType::kInternalized).ToLocalChecked(), \
-        [] (v8::Local<v8::String> /*property*/,                                            \
-            const v8::PropertyCallbackInfo<v8::Value>& info)                               \
-        {                                                                                  \
-            GetPropertyValue(getter, info);                                                \
-        },                                                                                 \
-        [] (v8::Local<v8::String> /*property*/,                                            \
-             v8::Local<v8::Value> value,                                                   \
-             const v8::PropertyCallbackInfo<void>& info)                                   \
-        {                                                                                  \
-            SetPropertyValue(setter, value, info);                                         \
-        }                                                                                  \
-    )
-
-v8::Local<v8::Object> Require(
-    const v8::Local<v8::Object>& thisModule,
-    const char* module);
-
-#define SET_RO_INDEXED_PROPERTY(objTemplate, member)         \
-    objTemplate->SetIndexedPropertyHandler(                  \
-        [] (uint32_t index,                                  \
-            const v8::PropertyCallbackInfo<v8::Value>& info) \
-        {                                                    \
-            GetIndexedPropertyValue(member, index, info);    \
-        }                                                    \
-    )
+napi_value Require(napi_env env, const char* module_name);

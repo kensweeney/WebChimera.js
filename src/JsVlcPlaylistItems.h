@@ -1,29 +1,34 @@
 #pragma once
 
-#include <node.h>
-#include <node_object_wrap.h>
+#include <node_api.h>
 
-class JsVlcPlayer; //#include "JsVlcPlayer.h"
+class JsVlcPlayer;
 
-class JsVlcPlaylistItems :
-    public node::ObjectWrap
+class JsVlcPlaylistItems
 {
 public:
-    static void initJsApi();
-    static v8::UniquePersistent<v8::Object> create(JsVlcPlayer& player);
+    static void initJsApi(napi_env env);
+    static napi_ref create(napi_env env, JsVlcPlayer& player);
 
-    v8::Local<v8::Object> item(uint32_t index);
+private:
+    JsVlcPlaylistItems(JsVlcPlayer* jsPlayer);
+    ~JsVlcPlaylistItems();
 
+    static napi_value jsCreate(napi_env env, napi_callback_info info);
+    static void jsFinalize(napi_env env, void* data, void* hint);
+
+    napi_value item(napi_env env, uint32_t index);
     unsigned count();
     void clear();
     bool remove(unsigned idx);
 
-private:
-    static void jsCreate(const v8::FunctionCallbackInfo<v8::Value>& args);
-    JsVlcPlaylistItems(v8::Local<v8::Object>& thisObject, JsVlcPlayer*);
-
-private:
-    static v8::Persistent<v8::Function> _jsConstructor;
+    static napi_value get_item(napi_env env, napi_callback_info info);
+    static napi_value get_count(napi_env env, napi_callback_info info);
+    static napi_value clear_items(napi_env env, napi_callback_info info);
+    static napi_value remove_item(napi_env env, napi_callback_info info);
 
     JsVlcPlayer* _jsPlayer;
+    napi_ref _wrapper;
+
+    static napi_ref _jsConstructor;
 };

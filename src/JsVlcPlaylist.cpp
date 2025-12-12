@@ -2,209 +2,92 @@
 
 #include "NodeTools.h"
 #include "JsVlcPlayer.h"
+#include "JsVlcMedia.h"
 #include "JsVlcPlaylistItems.h"
 
-v8::Persistent<v8::Function> JsVlcPlaylist::_jsConstructor;
+napi_ref JsVlcPlaylist::_jsConstructor = nullptr;
 
-void JsVlcPlaylist::initJsApi()
+void JsVlcPlaylist::initJsApi(napi_env env)
 {
-    JsVlcPlaylistItems::initJsApi();
-
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
-
-    Local<FunctionTemplate> constructorTemplate =
-        FunctionTemplate::New(isolate, jsCreate);
-    constructorTemplate->SetClassName(
-        String::NewFromUtf8(
-            isolate,
-            "VlcPlaylist",
-            NewStringType::kInternalized).ToLocalChecked());
-
-    Local<ObjectTemplate> protoTemplate = constructorTemplate->PrototypeTemplate();
-    Local<ObjectTemplate> instanceTemplate = constructorTemplate->InstanceTemplate();
-    instanceTemplate->SetInternalFieldCount(1);
-
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "Normal", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, static_cast<int>(PlaybackMode::Normal)),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "Loop", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, static_cast<int>(PlaybackMode::Loop)),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-    protoTemplate->Set(
-        String::NewFromUtf8(isolate, "Single", NewStringType::kInternalized).ToLocalChecked(),
-        Integer::New(isolate, static_cast<int>(PlaybackMode::Single)),
-        static_cast<PropertyAttribute>(ReadOnly | DontDelete));
-
-    SET_RO_PROPERTY(instanceTemplate, "itemCount", &JsVlcPlaylist::itemCount);
-    SET_RO_PROPERTY(instanceTemplate, "isPlaying", &JsVlcPlaylist::isPlaying);
-    SET_RO_PROPERTY(instanceTemplate, "items", &JsVlcPlaylist::items);
-
-    SET_RW_PROPERTY(instanceTemplate, "currentItem", &JsVlcPlaylist::currentItem, &JsVlcPlaylist::setCurrentItem);
-    SET_RW_PROPERTY(instanceTemplate, "mode", &JsVlcPlaylist::mode, &JsVlcPlaylist::setMode);
-
-    SET_METHOD(constructorTemplate, "add", &JsVlcPlaylist::add);
-    SET_METHOD(constructorTemplate, "addWithOptions", &JsVlcPlaylist::addWithOptions);
-    SET_METHOD(constructorTemplate, "play", &JsVlcPlaylist::play);
-    SET_METHOD(constructorTemplate, "playItem", &JsVlcPlaylist::playItem);
-    SET_METHOD(constructorTemplate, "pause", &JsVlcPlaylist::pause);
-    SET_METHOD(constructorTemplate, "togglePause", &JsVlcPlaylist::togglePause);
-    SET_METHOD(constructorTemplate, "stop",  &JsVlcPlaylist::stop);
-    SET_METHOD(constructorTemplate, "next",  &JsVlcPlaylist::next);
-    SET_METHOD(constructorTemplate, "prev",  &JsVlcPlaylist::prev);
-    SET_METHOD(constructorTemplate, "clear",  &JsVlcPlaylist::clear);
-    SET_METHOD(constructorTemplate, "removeItem",  &JsVlcPlaylist::removeItem);
-    SET_METHOD(constructorTemplate, "advanceItem",  &JsVlcPlaylist::advanceItem);
-
-    Local<Function> constructor = constructorTemplate->GetFunction(context).ToLocalChecked();
-    _jsConstructor.Reset(isolate, constructor);
-}
-
-v8::UniquePersistent<v8::Object> JsVlcPlaylist::create(JsVlcPlayer& player)
-{
-    using namespace v8;
-
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
-
-    Local<Function> constructor =
-        Local<Function>::New(isolate, _jsConstructor);
-
-    Local<Value> argv[] = { player.handle() };
-
-    return {
-        isolate,
-        constructor->NewInstance(context, sizeof(argv) / sizeof(argv[0]), argv).ToLocalChecked()
+    napi_property_descriptor properties[] = {
+        DECLARE_NAPI_METHOD("add", add_item),
+        DECLARE_NAPI_METHOD("play", play_item),
+        DECLARE_NAPI_METHOD("next", next),
+        DECLARE_NAPI_METHOD("prev", prev),
+        DECLARE_NAPI_GETTER("items", get_items),
+        DECLARE_NAPI_GETTER("currentItem", get_currentItem),
+        DECLARE_NAPI_PROPERTY("playbackMode", get_playbackMode, set_playbackMode),
     };
+
+    napi_value constructor;
+    napi_define_class(env, "VlcPlaylist", NAPI_AUTO_LENGTH, jsCreate, nullptr, sizeof(properties) / sizeof(properties[0]), properties, &constructor);
+    napi_create_reference(env, constructor, 1, &_jsConstructor);
 }
 
-void JsVlcPlaylist::jsCreate(const v8::FunctionCallbackInfo<v8::Value>& args)
+napi_ref JsVlcPlaylist::create(napi_env env, JsVlcPlayer& player)
 {
-    using namespace v8;
+    napi_value cons;
+    napi_get_reference_value(env, _jsConstructor, &cons);
 
-    Isolate* isolate = Isolate::GetCurrent();
-    Local<Context> context = isolate->GetCurrentContext();
+    napi_value external_player;
+    napi_create_external(env, &player, nullptr, nullptr, &external_player);
 
-    Local<Object> thisObject = args.Holder();
-    if(args.IsConstructCall() && thisObject->InternalFieldCount() > 0) {
-        JsVlcPlayer* jsPlayer =
-            ObjectWrap::Unwrap<JsVlcPlayer>(Handle<Object>::Cast(args[0]));
-        if(jsPlayer) {
-            JsVlcPlaylist* jsPlaylist = new JsVlcPlaylist(thisObject, jsPlayer);
-            args.GetReturnValue().Set(thisObject);
-        }
-    } else {
-        Local<Function> constructor =
-            Local<Function>::New(isolate, _jsConstructor);
-        Local<Value> argv[] = { args[0] };
-        args.GetReturnValue().Set(
-            constructor->NewInstance(context, sizeof(argv) / sizeof(argv[0]), argv).ToLocalChecked());
+    napi_value instance;
+    napi_new_instance(env, cons, 1, &external_player, &instance);
+
+    napi_ref instance_ref;
+    napi_create_reference(env, instance, 1, &instance_ref);
+    return instance_ref;
+}
+
+napi_value JsVlcPlaylist::jsCreate(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1];
+    napi_value this_arg;
+    napi_get_cb_info(env, info, &argc, args, &this_arg, nullptr);
+
+    JsVlcPlayer* jsPlayer;
+    napi_get_value_external(env, args[0], (void**)&jsPlayer);
+
+    JsVlcPlaylist* obj = new JsVlcPlaylist(jsPlayer);
+    napi_wrap(env, this_arg, obj, jsFinalize, nullptr, &obj->_wrapper);
+
+    return this_arg;
+}
+
+void JsVlcPlaylist::jsFinalize(napi_env env, void* data, void* hint) {
+    delete static_cast<JsVlcPlaylist*>(data);
+}
+
+JsVlcPlaylist::JsVlcPlaylist(JsVlcPlayer* jsPlayer) :
+    _jsPlayer(jsPlayer), _wrapper(nullptr)
+{
+    _jsPlaylistItemsRef = JsVlcPlaylistItems::create(_jsPlayer->getEnv(), *_jsPlayer);
+}
+
+JsVlcPlaylist::~JsVlcPlaylist() {
+    if (_wrapper) {
+        napi_delete_reference(_jsPlayer->getEnv(), _wrapper);
+    }
+    if (_jsPlaylistItemsRef) {
+        napi_delete_reference(_jsPlayer->getEnv(), _jsPlaylistItemsRef);
     }
 }
 
-JsVlcPlaylist::JsVlcPlaylist(
-    v8::Local<v8::Object>& thisObject,
-    JsVlcPlayer* jsPlayer) :
-    _jsPlayer(jsPlayer)
+int JsVlcPlaylist::add(const std::string& mrl, const std::vector<std::string>& options)
 {
-    Wrap(thisObject);
-
-    _jsItems = JsVlcPlaylistItems::create(*jsPlayer);
-}
-
-unsigned JsVlcPlaylist::itemCount()
-{
-    return _jsPlayer->player().item_count();
-}
-
-bool JsVlcPlaylist::isPlaying()
-{
-    return _jsPlayer->player().is_playing();
-}
-
-unsigned JsVlcPlaylist::mode()
-{
-    return static_cast<unsigned>(_jsPlayer->player().get_playback_mode());
-}
-
-void JsVlcPlaylist::setMode(unsigned  mode)
-{
-    vlc::player& p = _jsPlayer->player();
-
-    switch(mode) {
-        case static_cast<unsigned>(PlaybackMode::Normal):
-           p.set_playback_mode(vlc::mode_normal);
-            break;
-        case static_cast<unsigned>(PlaybackMode::Loop):
-            p.set_playback_mode(vlc::mode_loop);
-            break;
-        case static_cast<unsigned>(PlaybackMode::Single):
-            p.set_playback_mode(vlc::mode_single);
-            break;
+    libvlc_media_t* libvlc_media = libvlc_media_new_location(_jsPlayer->get_instance(), mrl.c_str());
+    for (const auto& opt : options) {
+        libvlc_media_add_option(libvlc_media, opt.c_str());
     }
+    vlc::media media(libvlc_media, true);
+    return _jsPlayer->player().add_media(media);
 }
 
-int JsVlcPlaylist::currentItem()
+bool JsVlcPlaylist::play(unsigned index)
 {
-    return _jsPlayer->player().current_item();
-}
-
-void JsVlcPlaylist::setCurrentItem(unsigned idx)
-{
-    _jsPlayer->player().set_current(idx);
-}
-
-int JsVlcPlaylist::add(const std::string& mrl)
-{
-    return _jsPlayer->player().add_media(mrl.c_str());
-}
-
-int JsVlcPlaylist::addWithOptions(
-    const std::string& mrl,
-    const std::vector<std::string>& options)
-{
-    std::vector<const char*> trusted_opts;
-    trusted_opts.reserve(options.size());
-
-    for(const std::string& opt: options) {
-        trusted_opts.push_back(opt.c_str());
-    }
-
-    return
-        _jsPlayer->player().add_media(
-            mrl.c_str(),
-            0, nullptr,
-            static_cast<unsigned>(trusted_opts.size()),
-            trusted_opts.data());
-}
-
-void JsVlcPlaylist::play()
-{
-    _jsPlayer->player().play();
-}
-
-bool JsVlcPlaylist::playItem(unsigned idx)
-{
-    return _jsPlayer->player().play(idx);
-}
-
-void JsVlcPlaylist::pause()
-{
-    _jsPlayer->player().pause();
-}
-
-void JsVlcPlaylist::togglePause()
-{
-    _jsPlayer->player().togglePause();
-}
-
-void JsVlcPlaylist::stop()
-{
-    _jsPlayer->player().stop();
+    return _jsPlayer->player().play(index);
 }
 
 void JsVlcPlaylist::next()
@@ -217,22 +100,123 @@ void JsVlcPlaylist::prev()
     _jsPlayer->player().prev();
 }
 
-void JsVlcPlaylist::clear()
+napi_value JsVlcPlaylist::items(napi_env env)
 {
-    _jsPlayer->player().clear_items();
+    napi_value items_obj;
+    napi_get_reference_value(env, _jsPlaylistItemsRef, &items_obj);
+    return items_obj;
 }
 
-bool JsVlcPlaylist::removeItem(unsigned idx)
+int JsVlcPlaylist::currentItem()
 {
-    return _jsPlayer->player().delete_item(idx);
+    return _jsPlayer->player().current_item();
 }
 
-void JsVlcPlaylist::advanceItem(unsigned idx, int count)
+std::string JsVlcPlaylist::playbackMode()
 {
-    _jsPlayer->player().advance_item(idx, count);
+    switch (_jsPlayer->player().get_playback_mode())
+    {
+    case vlc::mode_loop: return "loop";
+    case vlc::mode_single: return "repeat";
+    default: return "default";
+    }
 }
 
-v8::Local<v8::Object> JsVlcPlaylist::items()
+void JsVlcPlaylist::setPlaybackMode(const std::string& mode)
 {
-    return v8::Local<v8::Object>::New(v8::Isolate::GetCurrent(), _jsItems);
+    if (mode == "loop") {
+        _jsPlayer->player().set_playback_mode(vlc::mode_loop);
+    } else if (mode == "repeat") {
+        _jsPlayer->player().set_playback_mode(vlc::mode_single);
+    } else {
+        _jsPlayer->player().set_playback_mode(vlc::mode_normal);
+    }
+}
+
+napi_value JsVlcPlaylist::add_item(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2];
+    napi_value this_arg;
+    napi_get_cb_info(env, info, &argc, args, &this_arg, nullptr);
+    JsVlcPlaylist* obj;
+    napi_unwrap(env, this_arg, (void**)&obj);
+
+    if (argc > 0) {
+        std::string mrl = FromNapiValue<std::string>(env, args[0]);
+        std::vector<std::string> options;
+        if (argc > 1) {
+            options = FromNapiValue<std::vector<std::string>>(env, args[1]);
+        }
+        return ToNapiValue(env, obj->add(mrl, options));
+    }
+    return nullptr;
+}
+
+napi_value JsVlcPlaylist::play_item(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_value this_arg;
+    napi_get_cb_info(env, info, &argc, args, &this_arg, nullptr);
+    JsVlcPlaylist* obj;
+    napi_unwrap(env, this_arg, (void**)&obj);
+
+    if (argc > 0) {
+        return ToNapiValue(env, obj->play(FromNapiValue<uint32_t>(env, args[0])));
+    }
+    return nullptr;
+}
+
+napi_value JsVlcPlaylist::next(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcPlaylist* obj;
+    napi_unwrap(env, this_arg, (void**)&obj);
+    obj->next();
+    return nullptr;
+}
+
+napi_value JsVlcPlaylist::prev(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcPlaylist* obj;
+    napi_unwrap(env, this_arg, (void**)&obj);
+    obj->prev();
+    return nullptr;
+}
+
+napi_value JsVlcPlaylist::get_items(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcPlaylist* obj;
+    napi_unwrap(env, this_arg, (void**)&obj);
+    return obj->items(env);
+}
+
+napi_value JsVlcPlaylist::get_currentItem(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcPlaylist* obj;
+    napi_unwrap(env, this_arg, (void**)&obj);
+    return ToNapiValue(env, obj->currentItem());
+}
+
+napi_value JsVlcPlaylist::get_playbackMode(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcPlaylist* obj;
+    napi_unwrap(env, this_arg, (void**)&obj);
+    return ToNapiValue(env, obj->playbackMode());
+}
+
+napi_value JsVlcPlaylist::set_playbackMode(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_value this_arg;
+    napi_get_cb_info(env, info, &argc, args, &this_arg, nullptr);
+    JsVlcPlaylist* obj;
+    napi_unwrap(env, this_arg, (void**)&obj);
+    if (argc > 0) {
+        obj->setPlaybackMode(FromNapiValue<std::string>(env, args[0]));
+    }
+    return nullptr;
 }
