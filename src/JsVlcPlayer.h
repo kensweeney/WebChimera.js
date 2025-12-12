@@ -165,9 +165,3 @@ private:
     static napi_ref _jsConstructor;
 };
 
-napi_status napi_call_function(napi_env env,
-                               napi_value recv,
-                               napi_value func,
-                               size_t argc,
-                               const napi_value* argv,
-                               napi_value* result);
