@@ -79,7 +79,8 @@ namespace vlc
         libvlc_media_player_t* _mp;
     };
 
-    const char DEF_CHROMA[] = "RV32";
+    // change this to RGBA to correct color on app ->  const char DEF_CHROMA[] = "RV32";
+    const char DEF_CHROMA[] = "RGBA";
     enum {
         DEF_PIXEL_BYTES = 4,
 

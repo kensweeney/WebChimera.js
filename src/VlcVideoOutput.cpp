@@ -269,16 +269,16 @@ unsigned VlcVideoOutput::video_format_cb(
 {
     std::unique_ptr<VideoEvent> frameSetupEvent;
     switch(_pixelFormat) {
-        case PixelFormat::RV32: {
-            std::shared_ptr<RV32VideoFrame> videoFrame(new RV32VideoFrame());
-            frameSetupEvent.reset(new RV32FrameSetupEvent(videoFrame));
+        case PixelFormat::I420: {
+            std::shared_ptr<I420VideoFrame> videoFrame(new I420VideoFrame());
+            frameSetupEvent.reset(new I420FrameSetupEvent(videoFrame));
             _videoFrame = videoFrame;
             break;
         }
-        case PixelFormat::I420:
+        case PixelFormat::RV32: 
         default: {
-            std::shared_ptr<I420VideoFrame> videoFrame(new I420VideoFrame());
-            frameSetupEvent.reset(new I420FrameSetupEvent(videoFrame));
+            std::shared_ptr<RV32VideoFrame> videoFrame(new RV32VideoFrame());
+            frameSetupEvent.reset(new RV32FrameSetupEvent(videoFrame));
             _videoFrame = videoFrame;
             break;
         }

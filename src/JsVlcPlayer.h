@@ -102,8 +102,8 @@ private:
     // N-API methods
     static napi_value jsCreate(napi_env env, napi_callback_info info);
     static void jsFinalize(napi_env env, void* data, void* hint);
-
     static napi_value jsPlay(napi_env env, napi_callback_info info);
+    static napi_value jsStop(napi_env env, napi_callback_info info);
 
     // N-API properties
     napi_value playing(napi_env env);
@@ -115,7 +115,7 @@ private:
     void setPixelFormat(napi_env env, napi_value value);
     napi_value position(napi_env env);
     void setPosition(napi_env env, napi_value value);
-    napi_value time(napi_env env);
+    napi_value time(napi_env env, napi_callback_info info);
     void setTime(napi_env env, napi_value value);
     napi_value volume(napi_env env);
     void setVolume(napi_env env, napi_value value);

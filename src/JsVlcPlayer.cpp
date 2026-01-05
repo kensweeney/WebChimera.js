@@ -3,6 +3,7 @@
 #include <string.h>
 #include <vector>
 #include <windows.h>
+#include <malloc.h>
 
 #include "NodeTools.h"
 #include "JsVlcInput.h"
@@ -123,14 +124,7 @@ napi_value JsVlcPlayer::initJsApi(napi_env env, napi_value exports)
             p->togglePause();
             return nullptr;
         }),
-        NAPI_METHOD("stop", [](napi_env env, napi_callback_info info) -> napi_value {
-            napi_value this_arg;
-            napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
-            JsVlcPlayer* p;
-            napi_unwrap(env, this_arg, (void**)&p);
-            p->stop();
-            return nullptr;
-        }),
+        NAPI_METHOD("stop", jsStop),
         NAPI_METHOD("toggleMute", [](napi_env env, napi_callback_info info) -> napi_value {
             napi_value this_arg;
             napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
@@ -210,7 +204,7 @@ void JsVlcPlayer::jsFinalize(napi_env env, void* data, void* hint) {
 
 JsVlcPlayer::JsVlcPlayer(napi_env env, napi_callback_info info) : _env(env), _libvlc(nullptr) {
     _wrapper = nullptr;
-    for(int i=0; i<CB_Max; ++i) _jsCallbacks[i] = nullptr;
+    for (int i = 0; i < CB_Max; ++i) _jsCallbacks[i] = nullptr;
     _jsEventEmitterRef = nullptr;
     _jsFrameBufferRef = nullptr;
     _jsInputRef = nullptr;
@@ -376,6 +370,15 @@ void JsVlcPlayer::handleAsync() {
 }
 
 void* JsVlcPlayer::onFrameSetup(const RV32VideoFrame& videoFrame) {
+
+    if (!_jsCallbacks[CB_FrameSetup]) {
+        napi_value jsLevel, jsMessage, jsFormat;
+        napi_create_int32(_env, 4, &jsLevel); // Error level
+        napi_create_string_utf8(_env, "ERROR: No JS callback registered for FrameSetup!", NAPI_AUTO_LENGTH, &jsMessage);
+        napi_create_string_utf8(_env, "debug", NAPI_AUTO_LENGTH, &jsFormat);
+        callCallback(CB_LogMessage, { jsLevel, jsMessage, jsFormat });
+    }
+
     if(0 == videoFrame.width() || 0 == videoFrame.height() || 0 == videoFrame.size()) return nullptr;
 
     void* buffer_data;
@@ -383,7 +386,11 @@ void* JsVlcPlayer::onFrameSetup(const RV32VideoFrame& videoFrame) {
     napi_create_arraybuffer(_env, videoFrame.size(), &buffer_data, &array_buffer);
 
     napi_value typed_array;
-    napi_create_typedarray(_env, napi_uint8_array, videoFrame.size(), array_buffer, 0, &typed_array);
+    napi_status status = napi_create_typedarray(_env, napi_uint8_array, videoFrame.size(), array_buffer, 0, &typed_array);
+    if (status != napi_ok) {
+        fprintf(stderr, "Failed to create typed array! Status: %d\n", status);
+        return nullptr;
+    }
 
     napi_set_named_property(_env, typed_array, "width", ToNapiValue(_env, (int32_t)videoFrame.width()));
     napi_set_named_property(_env, typed_array, "height", ToNapiValue(_env, (int32_t)videoFrame.height()));
@@ -432,9 +439,29 @@ void* JsVlcPlayer::onFrameSetup(const I420VideoFrame& videoFrame) {
 }
 
 void JsVlcPlayer::onFrameReady() {
-    if (!_jsFrameBufferRef) return;
+	if (!_jsFrameBufferRef) {
+        fprintf(stderr, "onFrameReady: _jsFrameBufferRef is null, skipping.\n");
+        return;
+    }
+    
     napi_value frame;
-    napi_get_reference_value(_env, _jsFrameBufferRef, &frame);
+    napi_status status = napi_get_reference_value(_env, _jsFrameBufferRef, &frame);
+    if (status != napi_ok || frame == nullptr) {
+        fprintf(stderr, "Error: Frame buffer reference is invalid or empty.\n");
+        return;
+    }
+
+    // Get info about the buffer to log it
+    void* data = nullptr;
+    size_t byte_length = 0;
+    status = napi_get_typedarray_info(_env, frame, nullptr, &byte_length, &data, nullptr, nullptr);
+    
+    if (status == napi_ok) {
+        //fprintf(stderr, "Frame ready. Passing buffer to JS."); // Commented out to avoid spamming console
+    } else {
+        fprintf(stderr, "Frame ready. Could not retrieve TypedArray info.\n");
+    }
+    
     callCallback(CB_FrameReady, { frame });
 }
 
@@ -465,6 +492,7 @@ void JsVlcPlayer::handleLibvlcEvent(const libvlc_event_t& libvlcEvent) {
             currentItemEndReached();
             break;
         case libvlc_MediaPlayerEncounteredError:
+            fprintf(stderr, "VLC Error Encountered!\n");
             callback = CB_MediaPlayerEncounteredError;
             uv_timer_start(&_errorTimer, [](uv_timer_t* handle) {
                 if(handle->data) static_cast<JsVlcPlayer*>(handle->data)->currentItemEndReached();
@@ -502,20 +530,63 @@ void JsVlcPlayer::currentItemEndReached() {
         player().next();
 }
 
+napi_value JsVlcPlayer::jsStop(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcPlayer* p = nullptr;
+    napi_status status = napi_unwrap(env, this_arg, (void**)&p);
+
+    if (status != napi_ok || p == nullptr) {
+        fprintf(stderr, "Invalid object for 'stop' call.\n"); // added log message
+        napi_throw_error(env, "ERR_INVALID_THIS", "Function 'stop' was called on an invalid object.");
+        return nullptr;
+    }
+    p->stop();
+    return nullptr;
+}
+
+
 napi_value JsVlcPlayer::jsPlay(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
     napi_value this_arg;
     napi_get_cb_info(env, info, &argc, args, &this_arg, nullptr);
 
-    JsVlcPlayer* jsPlayer;
-    napi_unwrap(env, this_arg, (void**)&jsPlayer);
+    JsVlcPlayer* jsPlayer = nullptr;
+    napi_status status = napi_unwrap(env, this_arg, (void**)&jsPlayer);
 
-    if(argc == 0) {
-        jsPlayer->play();
-    } else if(argc == 1) {
-        jsPlayer->play(FromNapiValue<std::string>(env, args[0]));
+    if (status != napi_ok || jsPlayer == nullptr) {
+        napi_throw_error(env, "ERR_INVALID_THIS", "Function 'play' was called on an invalid object.");
+        return nullptr;
     }
+
+    // Case 1: play() was called with no arguments.
+    if (argc == 0) {
+        jsPlayer->play();
+        return nullptr;
+    }
+
+    // Case 2: play(mrl) was called with one argument.
+    // We must validate the type of the argument.
+    napi_valuetype valuetype;
+    napi_typeof(env, args[0], &valuetype);
+
+    if (valuetype == napi_string) {
+        auto mrl = FromNapiValue<std::string>(env, args[0]);
+        // If the string is empty, treat it as a simple play/resume call.
+        if (mrl.empty()) {
+            jsPlayer->play();
+        } else {
+            jsPlayer->play(mrl);
+        }
+    } else if (valuetype == napi_undefined || valuetype == napi_null) {
+        // If play(undefined) or play(null) is called, treat it as play().
+        jsPlayer->play();
+    } else {
+        // If the argument is not a string, undefined, or null, it's an error.
+        napi_throw_type_error(env, nullptr, "Invalid argument: 'play' expects a string (MRL), null, or undefined.");
+    }
+
     return nullptr;
 }
 
@@ -577,7 +648,16 @@ void JsVlcPlayer::callCallback(Callbacks_e callback, std::initializer_list<napi_
         napi_get_reference_value(_env, _jsCallbacks[callback], &cb_func);
         napi_value this_arg;
         napi_get_reference_value(_env, _wrapper, &this_arg);
-        napi_call_function(_env, this_arg, cb_func, argList.size() - 1, argList.data() + 1, nullptr);
+        napi_status status = napi_call_function(_env, this_arg, cb_func, argList.size() - 1, argList.data() + 1, nullptr);
+        if (status != napi_ok) {
+             bool is_exception;
+             napi_is_exception_pending(_env, &is_exception);
+             if (is_exception) {
+                 fprintf(stderr, "JS Exception pending after callback!\n");
+                 napi_value ex;
+                 napi_get_and_clear_last_exception(_env, &ex);
+             }
+        }
     }
 
     if (_jsEventEmitterRef) {
@@ -587,12 +667,50 @@ void JsVlcPlayer::callCallback(Callbacks_e callback, std::initializer_list<napi_
         napi_get_named_property(_env, eventEmitter, "emit", &emit_func);
         napi_call_function(_env, eventEmitter, emit_func, argList.size(), argList.data(), nullptr);
     }
+
+    if (callback != 1) {
+        for (size_t i = 0; i < argList.size(); ++i) {
+            napi_valuetype valuetype;
+            napi_typeof(_env, argList[i], &valuetype);
+            switch (valuetype) {
+                case napi_string: {
+                    size_t str_size;
+                    napi_get_value_string_utf8(_env, argList[i], nullptr, 0, &str_size);
+                    std::string str(str_size + 1, '\0');
+                    napi_get_value_string_utf8(_env, argList[i], &str[0], str.size(), nullptr);
+                    break;
+                }
+                case napi_number: {
+                    double num;
+                    napi_get_value_double(_env, argList[i], &num);
+                    break;
+                }
+                case napi_boolean: {
+                    bool b;
+                    napi_get_value_bool(_env, argList[i], &b);
+                    break;
+                }
+                case napi_object: {
+                     bool is_typedarray = false;
+                     napi_is_typedarray(_env, argList[i], &is_typedarray);
+                     if (is_typedarray) {
+                         size_t byte_length = 0;
+                         napi_get_typedarray_info(_env, argList[i], nullptr, &byte_length, nullptr, nullptr, nullptr);
+                     }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+    }
 }
 
 void JsVlcPlayer::play() { player().play(); }
 void JsVlcPlayer::play(const std::string& mrl) {
+    fprintf(stderr, "JsVlcPlayer::play called with mrl: %s\n", mrl.c_str()); // added log message
     vlc::player& p = player();
-    p.clear_items();
+	p.clear_items();
     const int idx = p.add_media(mrl.c_str());
     if(idx >= 0) p.play(idx);
 }

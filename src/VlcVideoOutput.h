@@ -21,8 +21,11 @@ protected:
 
     enum class PixelFormat
     {
-        RV32 = 0,
-        I420,
+        RV32 = 1,
+        I420 = 2,
+        RGBA = 3,
+        BGRA = 4,
+
     };
 
     PixelFormat pixelFormat() const
