@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>WebChimera.js Test App</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border: 5px solid white;
+            box-sizing: border-box;
+        }
+
+        #control-box {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+            display: flex;
+            gap: 10px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="video-canvas"></canvas>
+    <div id="control-box">
+        <button id="mute-btn">Mute</button>
+        <button id="pause-btn">Pause</button>
+        <button id="stop-btn">Stop</button>
+        <button id="play-btn">Play</button>
+    </div>
+    <script src="./renderer.js"></script>
+</body>
+</html></html>

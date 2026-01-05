@@ -1,0 +1,17 @@
+{
+    "name": "wcjs-electron-test",
+    "version": "1.0.0",
+    "description": "Electron app for testing WebChimera.js",
+    "main": "main.js",
+    "private": true,
+    "dependencies": {
+        "webchimera.js": "file:..",
+        "webgl-video-renderer": "^0.2.0"
+    },
+    "scripts": {
+        "start": "electron ."
+    },
+    "devDependencies": {
+        "electron": "^38.0.0"
+    }
+}
