@@ -77,11 +77,6 @@ void player_core::pause()
     _player.pause();
 }
 
-void player_core::togglePause()
-{
-    _player.togglePause();
-}
-
 void player_core::stop()
 {
     _player.stop();

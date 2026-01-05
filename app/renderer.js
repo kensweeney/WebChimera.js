@@ -63,7 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     muteBtn.addEventListener('click', () => {
-        window.electronAPI.togglePause();
+        window.electronAPI.toggleMute();
     });
 
     // Add event listeners for control buttons

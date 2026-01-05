@@ -116,14 +116,6 @@ napi_value JsVlcPlayer::initJsApi(napi_env env, napi_value exports)
             p->pause();
             return nullptr;
         }),
-        NAPI_METHOD("togglePause", [](napi_env env, napi_callback_info info) -> napi_value {
-            napi_value this_arg;
-            napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
-            JsVlcPlayer* p;
-            napi_unwrap(env, this_arg, (void**)&p);
-            p->togglePause();
-            return nullptr;
-        }),
         NAPI_METHOD("stop", jsStop),
         NAPI_METHOD("toggleMute", [](napi_env env, napi_callback_info info) -> napi_value {
             napi_value this_arg;
@@ -253,6 +245,10 @@ JsVlcPlayer::JsVlcPlayer(napi_env env, napi_callback_info info) : _env(env), _li
     _jsVideoRef = JsVlcVideo::create(*this, env);
     _jsSubtitlesRef = JsVlcSubtitles::create(*this, env);
     _jsPlaylistRef = JsVlcPlaylist::create(env, *this);
+
+    // Post-initialization: Use RV32, otherwise I am seeing 4 images if I don't change this.
+	// Electron is expecting RGBA, but RV32 seems to work here, I will set the format to RGBA in the vlc_vmem class.
+    VlcVideoOutput::setPixelFormat(VlcVideoOutput::PixelFormat::RV32);
 }
 
 void JsVlcPlayer::initLibvlc(napi_env env, napi_value vlcOpts) {
@@ -715,7 +711,6 @@ void JsVlcPlayer::play(const std::string& mrl) {
     if(idx >= 0) p.play(idx);
 }
 void JsVlcPlayer::pause() { player().pause(); }
-void JsVlcPlayer::togglePause() { player().togglePause(); }
 void JsVlcPlayer::stop() { player().stop(); }
 void JsVlcPlayer::toggleMute() { player().audio().toggle_mute(); }
 
