@@ -90,37 +90,15 @@ Copy-Item "$BUILD_DIR\Release\WebChimera.js.node" $FULL_PACKAGE_DIR
 # Create index.js
 "module.exports = require('./WebChimera.js.node')" | Out-File "$FULL_PACKAGE_DIR\index.js" -Encoding UTF8
 
-# Create exclude file
-$excludeContent = @"
-plugins\access_output
-plugins\control
-plugins\gui
-plugins\video_output
-plugins\visualization
-"@
-$excludeContent | Out-File "exclude_vlc_plugins.txt" -Encoding UTF8
-
-# Copy VLC plugins excluding the specified ones
-# Note: PowerShell doesn't have direct xcopy equivalent with exclude, so using Get-ChildItem and Where-Object
+# Copy all VLC plugins
 $pluginSrc = Join-Path $VLC_DIR "plugins"
-Get-ChildItem $pluginSrc -Recurse -File | Where-Object { $_.FullName -notmatch "access_output|control|gui|video_output|visualization" } | ForEach-Object {
-    # Build relative path without leading slash to avoid duplicate 'plugins\plugins'
-    $relative = $_.FullName.Substring($VLC_DIR.Length + 1).TrimStart('\','/')
-    $dest = Join-Path $FULL_PACKAGE_DIR $relative
-    $destDir = Split-Path $dest -Parent
-    if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
-    Copy-Item $_.FullName -Destination $dest -Force
+$pluginDest = Join-Path $FULL_PACKAGE_DIR "plugins"
+if (Test-Path $pluginSrc) {
+    Copy-Item -Path $pluginSrc -Destination $pluginDest -Recurse -Force
+} else {
+    Write-Host "VLC plugins directory not found at $pluginSrc, skipping."
 }
 
-# Specifically include libvmem_plugin.dll if present
-$vmemSrc = Join-Path $VLC_DIR "plugins\video_output\libvmem_plugin.dll"
-$vmemDestDir = Join-Path $FULL_PACKAGE_DIR "plugins\video_output"
-if (Test-Path $vmemSrc) {
-    if (-not (Test-Path $vmemDestDir)) { New-Item -ItemType Directory -Path $vmemDestDir -Force | Out-Null }
-    Copy-Item $vmemSrc -Destination $vmemDestDir -Force
-} else {
-    Write-Host "libvmem_plugin.dll not found at $vmemSrc, skipping."
-}
 
 # Copy VLC DLLs
 foreach ($dll in @("libvlc.dll","libvlccore.dll")) {
