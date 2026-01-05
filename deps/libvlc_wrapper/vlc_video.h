@@ -45,6 +45,8 @@ namespace vlc
         std::string get_aspect();
         void set_aspect( const std::string& );
 
+        bool get_pixel_aspect_ratio( unsigned& num, unsigned& den );
+
         std::string get_crop();
         void set_crop( const std::string& );
 

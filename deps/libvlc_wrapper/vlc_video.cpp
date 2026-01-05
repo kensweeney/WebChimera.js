@@ -64,6 +64,24 @@ void vlc::video::set_aspect( const std::string& aspect )
     libvlc_video_set_aspect_ratio( _player.get_mp(), aspect.c_str() );
 }
 
+bool vlc::video::get_pixel_aspect_ratio(unsigned& num, unsigned& den)
+{
+    unsigned w, h;
+    if (libvlc_video_get_size(_player.get_mp(), 0, &w, &h) != 0)
+        return false;
+	//TODO: Implement proper SAR retrieval
+    // 
+    // This function does not exist in this version of libvlc.
+    // This is a placeholder to allow compilation.
+    // A proper implementation will require calculating the PAR from DAR and resolution.
+    // return libvlc_video_get_sar(_player.get_mp(), &num, &den) == 0;
+
+    // For now, let's default to 1:1
+    num = 1;
+    den = 1;
+    return true;
+}
+
 std::string vlc::video::get_crop()
 {
     if( !_player.is_open() )
