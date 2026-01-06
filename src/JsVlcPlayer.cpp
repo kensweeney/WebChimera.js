@@ -133,6 +133,11 @@ napi_value JsVlcPlayer::initJsApi(napi_env env, napi_value exports)
             p->close();
             return nullptr;
         }),
+        NAPI_GETTER("input", get_input),
+        NAPI_GETTER("audio", get_audio),
+        NAPI_GETTER("video", get_video),
+        NAPI_GETTER("subtitles", get_subtitles),
+        NAPI_GETTER("playlist", get_playlist),
         NAPI_PROPERTY("onFrameSetup", JsVlcPlayer::getJsCallback<CB_FrameSetup>, JsVlcPlayer::setJsCallback<CB_FrameSetup>),
         NAPI_PROPERTY("onFrameReady", JsVlcPlayer::getJsCallback<CB_FrameReady>, JsVlcPlayer::setJsCallback<CB_FrameReady>),
         NAPI_PROPERTY("onFrameCleanup", JsVlcPlayer::getJsCallback<CB_FrameCleanup>, JsVlcPlayer::setJsCallback<CB_FrameCleanup>),
@@ -628,6 +633,46 @@ void JsVlcPlayer::setJsCallback(napi_env env, napi_value value, Callbacks_e call
     if (valuetype == napi_function) {
         napi_create_reference(env, value, 1, &_jsCallbacks[callback]);
     }
+}
+
+napi_value JsVlcPlayer::get_input(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcPlayer* p;
+    napi_unwrap(env, this_arg, (void**)&p);
+    return p->input(env);
+}
+
+napi_value JsVlcPlayer::get_audio(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcPlayer* p;
+    napi_unwrap(env, this_arg, (void**)&p);
+    return p->audio(env);
+}
+
+napi_value JsVlcPlayer::get_video(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcPlayer* p;
+    napi_unwrap(env, this_arg, (void**)&p);
+    return p->video(env);
+}
+
+napi_value JsVlcPlayer::get_subtitles(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcPlayer* p;
+    napi_unwrap(env, this_arg, (void**)&p);
+    return p->subtitles(env);
+}
+
+napi_value JsVlcPlayer::get_playlist(napi_env env, napi_callback_info info) {
+    napi_value this_arg;
+    napi_get_cb_info(env, info, nullptr, nullptr, &this_arg, nullptr);
+    JsVlcPlayer* p;
+    napi_unwrap(env, this_arg, (void**)&p);
+    return p->playlist(env);
 }
 
 void JsVlcPlayer::callCallback(Callbacks_e callback, std::initializer_list<napi_value> list) {

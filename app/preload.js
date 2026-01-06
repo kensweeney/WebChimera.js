@@ -32,6 +32,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     play: (mrl) => player.play(mrl),
     pause: () => player.pause(),
     stop: () => player.stop(),
+    toggleMute: () => player.toggleMute(),
+    setVolume: (vol) => {
+        if (player.audio) {
+            player.audio.volume = parseInt(vol);
+        }
+    },
     // Expose a way to set callbacks
     on: (eventName, callback) => {
         // Map "onFrameSetup" -> "FrameSetup" for EventEmitter

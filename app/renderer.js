@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let imageData = null;
 
     // Control buttons
+    const volSlider = document.getElementById('vol-slider');
     const muteBtn = document.getElementById('mute-btn');
     const pauseBtn = document.getElementById('pause-btn');
     const stopBtn = document.getElementById('stop-btn');
@@ -60,6 +61,15 @@ document.addEventListener('DOMContentLoaded', () => {
     window.electronAPI.onPlayMedia((mrl) => {
         console.log('Received play-media command:', mrl);
         window.electronAPI.play(mrl);
+    });
+
+    volSlider.addEventListener('input', (event) => {
+        const sliderValue = event.target.value;
+        // Non-linear volume mapping
+        const x = sliderValue / 100;
+        const y = Math.pow(1 - x, 2);
+        const volume = 100 - Math.round(y * 100);
+        window.electronAPI.setVolume(volume);
     });
 
     muteBtn.addEventListener('click', () => {

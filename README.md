@@ -19,7 +19,6 @@ libvlc binding for Electron
 * [libvlc 2.2.x x64 has issue with subtitles](https://github.com/RSATom/WebChimera.js/issues/65)
 * [Webpack](https://github.com/RSATom/WebChimera.js/wiki/WebChimera.js-with-Webpack)
 
-
 ## Prebuilt binaries
 * https://github.com/RSATom/WebChimera.js/releases
 
@@ -62,3 +61,71 @@ for apt based distros:
 * `git clone --recursive https://github.com/RSATom/WebChimera.js.git`
 * `cd WebChimera.js`
 * `./build_electron.sh`
+
+## Example Usage
+To use WebChimera.js in your Electron application, you can set up a player instance in the preload script. Below is an example of how to do this:
+
+```javascript
+const { contextBridge, ipcRenderer } = require('electron');
+const path = require('path');
+const EventEmitter = require('events');
+
+// Construct the path to the native module
+const wcjsPath = path.join(__dirname, '..', 'build', 'webchimera.js', 'WebChimera.js.node');
+const { VlcPlayer } = require(wcjsPath);
+
+// Get the plugin path from the main process
+const vlcPluginPath = process.env.VLC_PLUGIN_PATH;
+
+const em = new EventEmitter();
+
+// Create the player instance here in the preload script, now with the plugin path
+const player = new VlcPlayer([
+    '--verbose=2',
+    `--plugin-path=${vlcPluginPath}`,
+    '--vout=vmem',
+    '--no-video-title-show',
+    '--vmem-chroma=RGBA' // Request raw RGBA frames
+], em);
+
+// Expose a secure API to the renderer process
+contextBridge.exposeInMainWorld('electronAPI', {
+    // Expose methods that call the real player instance
+    ff: () => player.ff(),
+    play: (mrl) => player.play(mrl),
+    pause: () => player.pause(),
+    stop: () => player.stop(),
+    toggleMute: () => player.toggleMute(),
+    setVolume: (vol) => {
+        if (player.audio) {
+            player.audio.volume = parseInt(vol);
+        }
+    },
+    // Expose a way to set callbacks
+    on: (eventName, callback) => {
+        // Map "onFrameSetup" -> "FrameSetup" for EventEmitter
+        let internalName = eventName;
+        if (eventName.startsWith('on')) {
+            internalName = eventName.substring(2);
+        }
+        
+        em.on(internalName, callback);
+
+        // Also set the property on the player object as a fallback/primary
+        // This triggers the C++ setter
+        try {
+            player[eventName] = callback;
+        } catch (e) {
+            console.error(`Failed to set property ${eventName} on player:`, e);
+        }
+    },
+
+    // We don't need setupCanvas anymore
+    onPlayMedia: (callback) => ipcRenderer.on('play-media', (event, ...args) => callback(...args)),
+    getVlcPluginPath: () => vlcPluginPath,
+});
+```
+
+This example demonstrates how to create a player instance and expose methods to the renderer process for controlling playback. Make sure to adjust the paths and configurations according to your project setup.
+
+This updated `README.md` now includes a new "Example Usage" section that provides a practical example of how to use WebChimera.js in an Electron application, enhancing the document's utility for developers.

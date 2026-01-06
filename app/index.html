@@ -35,11 +35,16 @@
             display: flex;
             gap: 10px;
         }
+        
+        #vol-slider {
+            width: 100px;
+        }
     </style>
 </head>
 <body>
     <canvas id="video-canvas"></canvas>
     <div id="control-box">
+        <input type="range" id="vol-slider" min="0" max="100" value="100">
         <button id="mute-btn">Mute</button>
         <button id="pause-btn">Pause</button>
         <button id="stop-btn">Stop</button>
@@ -47,4 +52,4 @@
     </div>
     <script src="./renderer.js"></script>
 </body>
-</html></html>
+</html>

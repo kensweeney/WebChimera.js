@@ -132,6 +132,13 @@ private:
     template<Callbacks_e C>
     static napi_value setJsCallback(napi_env env, napi_callback_info info);
 
+    // Wrapper getters
+    static napi_value get_input(napi_env env, napi_callback_info info);
+    static napi_value get_audio(napi_env env, napi_callback_info info);
+    static napi_value get_video(napi_env env, napi_callback_info info);
+    static napi_value get_subtitles(napi_env env, napi_callback_info info);
+    static napi_value get_playlist(napi_env env, napi_callback_info info);
+
     // Wrapped objects
     napi_value input(napi_env env);
     napi_value audio(napi_env env);
