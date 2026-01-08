@@ -15,6 +15,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const pauseBtn = document.getElementById('pause-btn');
     const stopBtn = document.getElementById('stop-btn');
     const playBtn = document.getElementById('play-btn');
+    const rewindBtn = document.getElementById('rewind-btn');
+    const ffBtn = document.getElementById('ff-btn');
 
     // Set callbacks using the new 'on' method
     window.electronAPI.on('onFrameSetup', (width, height, pixelFormat, frame) => {
@@ -88,6 +90,14 @@ document.addEventListener('DOMContentLoaded', () => {
     playBtn.addEventListener('click', () => {
         window.electronAPI.play();
      });
+
+    rewindBtn.addEventListener('click', () => {
+        window.electronAPI.rw();
+    });
+
+    ffBtn.addEventListener('click', () => {
+        window.electronAPI.ff();
+    });
 
     // Get the VLC plugin path from the main process
     const vlcPath = window.electronAPI.getVlcPluginPath();

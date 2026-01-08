@@ -11,24 +11,29 @@ const vlcPluginPath = process.env.VLC_PLUGIN_PATH;
 
 const em = new EventEmitter();
 
-//const player = require('..').createPlayer([
-//    '--video-title=WCS-Player',
-//    '--verbose=2',
-//    '--no-video-title-show'
-//]);
 // Create the player instance here in the preload script, now with the plugin path
 const player = new VlcPlayer([
-    '--verbose=2',
+    '--verbose=1',
     `--plugin-path=${vlcPluginPath}`,
     '--vout=vmem',
     '--no-video-title-show',
+    `--network-caching=300`,
     '--vmem-chroma=RGBA' // Request raw RGBA frames
 ], em);
 
 // Expose a secure API to the renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
     // Expose methods that call the real player instance
-    ff: () => player.ff(),
+    rw: () => {
+        if (player.input) {
+            player.input.time -= 10000; // Rewind 10 seconds
+        }
+    },
+    ff: () => {
+        if (player.input) {
+            player.input.time += 10000; // Fast forward 10 seconds
+        }
+    },
     play: (mrl) => player.play(mrl),
     pause: () => player.pause(),
     stop: () => player.stop(),
