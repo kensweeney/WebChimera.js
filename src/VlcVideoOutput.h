@@ -45,6 +45,7 @@ protected:
 
     //will reset current flag state
     bool isFrameReady();
+    void setChroma(const char* chroma);
 
 private:
     struct VideoEvent;

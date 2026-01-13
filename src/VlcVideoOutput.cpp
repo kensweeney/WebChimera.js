@@ -4,6 +4,15 @@
 
 #include <cassert>
 
+static std::string g_chroma;
+
+void VlcVideoOutput::setChroma(const char* chroma)
+{
+    if (chroma) {
+        g_chroma = chroma;
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 VlcVideoOutput::VideoFrame::VideoFrame() :
     _width(0), _height(0), _size(0),
@@ -59,7 +68,11 @@ unsigned VlcVideoOutput::RV32VideoFrame::video_format_cb(
     _width = *width;
     _height = *height;
 
-    memcpy(chroma, vlc::DEF_CHROMA, sizeof(vlc::DEF_CHROMA) - 1);
+    if (!g_chroma.empty()) {
+        strcpy(chroma, g_chroma.c_str());
+    } else {
+        memcpy(chroma, vlc::DEF_CHROMA, sizeof(vlc::DEF_CHROMA) - 1);
+    }
     *pitches = *width * vlc::DEF_PIXEL_BYTES;
     *lines = *height;
 
@@ -98,9 +111,12 @@ unsigned VlcVideoOutput::I420VideoFrame::video_format_cb(
     _width = *width;
     _height = *height;
 
-    const char CHROMA[] = "I420";
-
-    memcpy(chroma, CHROMA, sizeof(CHROMA) - 1);
+    if (!g_chroma.empty()) {
+        strcpy(chroma, g_chroma.c_str());
+    } else {
+        const char CHROMA[] = "I420";
+        memcpy(chroma, CHROMA, sizeof(CHROMA) - 1);
+    }
 
     const unsigned evenWidth = *width + (*width & 1);
     const unsigned evenHeight = *height + (*height & 1);

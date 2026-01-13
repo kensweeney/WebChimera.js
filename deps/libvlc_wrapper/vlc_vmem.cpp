@@ -96,6 +96,7 @@ unsigned vmem::video_format_cb( char* chroma,
                                 unsigned* pitches, unsigned* lines )
 {
     if ( original_media_width != _desired_width && original_media_height != _desired_height ) {
+		fprintf(stderr, "vmem: resizing from %ux%u to ", *width, *height);
         float src_aspect = (float) *width / *height;
         float dst_aspect = (float) _desired_width / _desired_height;
         if ( src_aspect > dst_aspect ) {
@@ -115,15 +116,46 @@ unsigned vmem::video_format_cb( char* chroma,
     _media_width  = *width;
     _media_height = *height;
 
-    memcpy( chroma, DEF_CHROMA, sizeof( DEF_CHROMA ) - 1 );
-    *pitches = _media_width * DEF_PIXEL_BYTES;
+    unsigned pixel_bytes = DEF_PIXEL_BYTES;
+    if (!_chroma_format.empty()) {
+        strcpy(chroma, _chroma_format.c_str());
+        if (_chroma_format == "I420" || _chroma_format == "NV12" || _chroma_format == "P010") {
+            // Planar formats have different pitch calculations,
+            // but for the raw buffer size, we can approximate this way.
+            // The actual plane setup is handled by the frame classes.
+            pixel_bytes = 1; 
+        } else if (_chroma_format == "RGBA" || _chroma_format == "BGRA" || _chroma_format == "RV32") {
+            pixel_bytes = 4;
+        } else {
+            // Default to 4 bytes per pixel for unknown formats
+			pixel_bytes = 4;
+        }
+    } else {
+        memcpy( chroma, DEF_CHROMA, sizeof( DEF_CHROMA ) - 1 );
+        // Default to 4 bytes per pixel for unknown formats
+        pixel_bytes = 4;
+    }
+
+    *pitches = _media_width * pixel_bytes;
     *lines   = _media_height;
+
+    // For planar formats, we might need more space for U and V planes
+    size_t bufferSize = *pitches * *lines;
+    if (_chroma_format == "I420" || _chroma_format == "NV12") {
+        bufferSize = bufferSize * 3 / 2;
+    } else if (_chroma_format == "P010") {
+        bufferSize = bufferSize * 3; // 10-bit, so more space needed
+    }
 
     //+1 for vlc 2.0.3/2.1 bug workaround.
     //They writes after buffer ed boundary by some reason unknown to me...
-    _frame_buf.resize( *pitches * ( *lines + 1 ) );
+    _frame_buf.resize( bufferSize + *pitches );
 
     on_format_setup();
+
+    fprintf(stderr, "vmem: video format setup: %s %ux%u, pitch=%u, lines=%u, buffer size=%zu\n",
+            chroma, _media_width,  _media_height,
+		*pitches, *lines, _frame_buf.size());
 
     return 1;
 }
@@ -156,4 +188,11 @@ void vmem::set_desired_size( unsigned width, unsigned height )
 {
     _desired_width = width;
     _desired_height = height;
+}
+
+void vmem::set_chroma(const char* chroma)
+{
+    if (chroma) {
+        _chroma_format = chroma;
+    }
 }

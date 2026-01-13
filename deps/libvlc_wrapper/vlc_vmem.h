@@ -26,6 +26,7 @@
 #pragma once
 
 #include <vector>
+#include <string>
 
 #include "vlc_basic_player.h"
 
@@ -88,6 +89,20 @@ namespace vlc
         original_media_height = 0
     };
 
+    class chroma
+    {
+    public:
+        chroma( const char* chroma_format = DEF_CHROMA, unsigned pixel_bytes = DEF_PIXEL_BYTES )
+            : _format( chroma_format ), _pixel_bytes( pixel_bytes ) {}
+
+        const char* format() const { return _format; }
+        unsigned pixel_bytes() const { return _pixel_bytes; }
+
+    private:
+        const char* _format;
+        unsigned    _pixel_bytes;
+    };
+
     class vmem : public basic_vmem_wrapper
     {
     public:
@@ -95,6 +110,7 @@ namespace vlc
 
         //0 - use size same as source has
         void set_desired_size( unsigned width, unsigned height );
+        void set_chroma(const char* chroma);
 
         unsigned width() const { return _media_width; }
         unsigned height() const { return _media_height; }
@@ -127,5 +143,6 @@ namespace vlc
         unsigned           _desired_height;
         unsigned           _media_width;
         unsigned           _media_height;
+        std::string        _chroma_format;
     };
 };
