@@ -13,7 +13,7 @@ const em = new EventEmitter();
 
 // Create the player instance here in the preload script, now with the plugin path
 const player = new VlcPlayer([
-    '--verbose=1',
+    '--verbose=0',
     `--plugin-path=${vlcPluginPath}`,
     '--vout=vmem',
     '--no-video-title-show',
