@@ -5,12 +5,20 @@
 #include <cassert>
 
 static std::string g_chroma;
+static std::string g_vout;
 
 void VlcVideoOutput::setChroma(const char* chroma)
 {
     if (chroma) {
         g_chroma = chroma;
     }
+}
+
+void VlcVideoOutput::setVout(const char* vout)
+{
+    if (vout) {
+        g_vout = vout;
+	}
 }
 
 ///////////////////////////////////////////////////////////////////////////////

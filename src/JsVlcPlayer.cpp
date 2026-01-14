@@ -254,9 +254,6 @@ JsVlcPlayer::JsVlcPlayer(napi_env env, napi_callback_info info) : _env(env), _li
     _jsSubtitlesRef = JsVlcSubtitles::create(*this, env);
     _jsPlaylistRef = JsVlcPlaylist::create(env, *this);
 
-    // Post-initialization: Use RV32, otherwise I am seeing 4 images if I don't change this.
-    // Electron is expecting RGBA, but RV32 seems to work here, I will set the format to RGBA in the vlc_vmem class.
-    VlcVideoOutput::setPixelFormat(VlcVideoOutput::PixelFormat::RV32);
 }
 
 void JsVlcPlayer::initLibvlc(napi_env env, napi_value vlcOpts) {
@@ -322,8 +319,33 @@ void JsVlcPlayer::initLibvlc(napi_env env, napi_value vlcOpts) {
             fprintf(stderr, "  VLC Option[%d]: %s\n", i, libvlcOpts.back());
         }
 
+        if (!vout.empty()) {
+            VlcVideoOutput::setVout(vout.c_str());
+        }
         if (!vmem_chroma.empty()) {
             VlcVideoOutput::setChroma(vmem_chroma.c_str());
+            if (vmem_chroma == "I420") {
+                VlcVideoOutput::setPixelFormat(VlcVideoOutput::PixelFormat::I420);
+            }
+            else if (vmem_chroma == "BGRA") {
+                VlcVideoOutput::setPixelFormat(VlcVideoOutput::PixelFormat::BGRA);
+            }
+            else if (vmem_chroma == "RGBA") {
+                VlcVideoOutput::setPixelFormat(VlcVideoOutput::PixelFormat::RGBA);
+            }
+            else if (vmem_chroma == "RV32") {
+                VlcVideoOutput::setPixelFormat(VlcVideoOutput::PixelFormat::RV32);
+            }
+            else {
+                // Default to RV32 for other formats like RV32, RGBA etc.
+                VlcVideoOutput::setPixelFormat(VlcVideoOutput::PixelFormat::RV32);
+            }
+        }
+        else {
+            // Default vout and chroma
+            VlcVideoOutput::setVout("vmem");
+            VlcVideoOutput::setChroma("I420");
+			VlcVideoOutput::setPixelFormat(VlcVideoOutput::PixelFormat::I420);
         }
 
         _libvlc = libvlc_new(libvlcOpts.size(), libvlcOpts.data());

@@ -96,7 +96,7 @@ unsigned vmem::video_format_cb( char* chroma,
                                 unsigned* pitches, unsigned* lines )
 {
     if ( original_media_width != _desired_width && original_media_height != _desired_height ) {
-		fprintf(stderr, "vmem: resizing from %ux%u to ", *width, *height);
+		//fprintf(stderr, "vmem: resizing from %ux%u to ", *width, *height);
         float src_aspect = (float) *width / *height;
         float dst_aspect = (float) _desired_width / _desired_height;
         if ( src_aspect > dst_aspect ) {
@@ -153,9 +153,9 @@ unsigned vmem::video_format_cb( char* chroma,
 
     on_format_setup();
 
-    fprintf(stderr, "vmem: video format setup: %s %ux%u, pitch=%u, lines=%u, buffer size=%zu\n",
-            chroma, _media_width,  _media_height,
-		*pitches, *lines, _frame_buf.size());
+    //fprintf(stderr, "vmem: video format setup: %s %ux%u, pitch=%u, lines=%u, buffer size=%zu\n",
+    //        chroma, _media_width,  _media_height,
+	//	*pitches, *lines, _frame_buf.size());
 
     return 1;
 }

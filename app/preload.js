@@ -17,7 +17,7 @@ const player = new VlcPlayer([
     `--plugin-path=${vlcPluginPath}`,
     '--vout=vmem',
     '--no-video-title-show',
-    `--network-caching=300`,
+    `--network-caching=1000`,
     '--vmem-chroma=RGBA' // Request raw RGBA frames
 ], em);
 
